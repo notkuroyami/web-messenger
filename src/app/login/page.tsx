@@ -8,6 +8,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const router = useRouter();
   const [message, setMessage] = useState("");
+  const [greetingMsg, setgreetingMsg] = useState("");
 
   const handleRegister = () => router.push("/register");
 
@@ -28,8 +29,16 @@ export default function LoginPage() {
         return;
       }
 
-      setMessage(`Welcome, ${data.user.username}!`);
-      setTimeout(() => router.push("/chats"), 1000)
+      setgreetingMsg(`Welcome, ${data.user.username}!`);
+
+      const greeting = document.getElementById("greeting");
+
+      if (greeting) {
+        greeting.classList.remove("opacity-0");
+        greeting.classList.add("opacity-100");
+      }
+
+      setTimeout(() => router.push("/chats"), 1000);
     } catch (err) {
       console.error("Request error:", err);
       setMessage("Server connection error");
@@ -83,7 +92,15 @@ export default function LoginPage() {
           </div>
         </form>
 
-        {message && <p className="text-center mt-4 text-white font-bold tracking-[4px]">{message}</p>}
+        {message && <p className="text-center mt-4 text-red-500 font-bold tracking-[4px]">{message}! o_O</p>}
+        <div
+          id="greeting"
+          className="fixed pointer-events-none inset-0 flex items-center justify-center bg-indigo-800/50 opacity-0 transition-opacity duration-900"
+        >
+          <p className="text-6xl bg-black/20 p-10 rounded-[50] font-bold text-white text-center tracking-[4px]">
+            {greetingMsg}! -_-
+          </p>
+        </div>
       </div>
     </div>
   );
