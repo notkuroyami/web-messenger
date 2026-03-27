@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { signIn } from "next-auth/react"; // Импортируем signIn
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -12,35 +13,37 @@ export default function LoginPage() {
 
   const handleRegister = () => router.push("/register");
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    setMessage(""); // Сбрасываем ошибки
 
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      // Используем signIn из next-auth вместо обычного fetch
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+        callbackUrl: "/chats", // Явно указываем адрес
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        setMessage(data.message || "Ошибка входа");
+      if (result?.error) {
+        setMessage("Invalid email or password");
         return;
       }
 
-      setgreetingMsg(`Welcome, ${data.user.username}!`);
+      // Если вход успешен, запускаем твою анимацию
+      setgreetingMsg(`Welcome back!`);
 
       const greeting = document.getElementById("greeting");
-
       if (greeting) {
         greeting.classList.remove("opacity-0");
         greeting.classList.add("opacity-100");
       }
 
+      // Через секунду переходим в чаты (теперь сессия активна!)
       setTimeout(() => router.push("/chats"), 1000);
     } catch (err) {
-      console.error("Request error:", err);
+      console.error("Login error:", err);
       setMessage("Server connection error");
     }
   };
@@ -55,7 +58,7 @@ export default function LoginPage() {
           className="flex flex-col gap-10 tracking-[2px] text-xl font-bold"
           onSubmit={handleSubmit}
         >
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center text-white">
             <label className="mr-3 py-1">Email</label>
             <input
               className="bg-white rounded-xl px-3 py-1 focus:outline-none text-black"
@@ -65,7 +68,7 @@ export default function LoginPage() {
               required
             />
           </div>
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center text-white">
             <label className="mr-3 py-1">Password</label>
             <input
               className="bg-white rounded-xl px-3 py-1 focus:outline-none text-black"
@@ -92,13 +95,18 @@ export default function LoginPage() {
           </div>
         </form>
 
-        {message && <p className="text-center mt-4 text-red-500 font-bold tracking-[4px]">{message}! o_O</p>}
+        {message && (
+          <p className="text-center mt-4 text-red-500 font-bold tracking-[4px]">
+            {message}! o_O
+          </p>
+        )}
+
         <div
           id="greeting"
-          className="fixed pointer-events-none inset-0 flex items-center justify-center bg-indigo-800/50 opacity-0 transition-opacity duration-900"
+          className="fixed pointer-events-none inset-0 flex items-center justify-center bg-slate-950/50 opacity-0 transition-opacity duration-700"
         >
-          <p className="text-6xl bg-black/20 p-10 rounded-[50] font-bold text-white text-center tracking-[4px]">
-            {greetingMsg}! -_-
+          <p className="text-6xl bg-black/20 p-10 rounded-[50px] font-bold text-white text-center tracking-[4px]">
+            {greetingMsg}! ^_^
           </p>
         </div>
       </div>

@@ -1,33 +1,56 @@
-import { NextResponse } from "next/server";
-import bcrypt from "bcrypt";
+import NextAuth from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
 import connectDB from "@/lib/db";
 import User from "@/models/User";
+import bcrypt from "bcrypt";
 
-export async function POST(req) {
-  try {
-    await connectDB();
+export const authOptions = {
+  providers: [
+    CredentialsProvider({
+      name: "Credentials",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" }
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) {
+          return null;
+        }
 
-    const { email, password } = await req.json();
-    const user = await User.findOne({ email });
+        await connectDB();
 
-    if (!user) {
-      return NextResponse.json({ message: "User not found" }, { status: 404 });
-    }
+        // Ищем пользователя в твоей базе по Email
+        const user = await User.findOne({ email: credentials.email });
 
-    const validPassword = await bcrypt.compare(password, user.passwordHash);
-    if (!validPassword) {
-      return NextResponse.json({ message: "Wrong password" }, { status: 401 });
-    }
+        if (!user) {
+          return null;
+        }
 
-    return NextResponse.json({
-      message: "Login successful",
-      user: { id: user._id, username: user.username, email: user.email },
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    return NextResponse.json(
-      { message: "Server error", error: err.message },
-      { status: 500 }
-    );
-  }
-}
+        // Проверяем пароль (сравниваем с passwordHash из базы)
+        const isValid = await bcrypt.compare(credentials.password, user.passwordHash);
+
+        if (!isValid) {
+          return null;
+        }
+
+        // Возвращаем объект пользователя. 
+        // Поле "name" в NextAuth — это то, что мы выводим как username
+        return {
+          id: user._id.toString(),
+          name: user.username,
+          email: user.email,
+        };
+      }
+    })
+  ],
+  session: {
+    strategy: "jwt", // Используем JSON Web Tokens для сессий
+  },
+  pages: {
+    signIn: "/login", // Куда редиректить, если нужна авторизация
+  },
+  secret: process.env.NEXTAUTH_SECRET, // Должен быть в твоем .env.local
+};
+
+const handler = NextAuth(authOptions);
+export { handler as GET, handler as POST };
