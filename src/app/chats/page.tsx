@@ -1,10 +1,19 @@
 "use client";
-import React, { useState, useEffect } from "react";
+
+import React, { useState, useEffect, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
-interface User { _id: string; username: string; }
-interface IMessage { sender: string; text: string; timestamp: string; }
+interface User {
+  _id: string;
+  username: string;
+}
+interface IMessage {
+  sender: string;
+  text: string;
+  timestamp: string;
+  seen?: boolean;
+}
 
 export default function ChatsPage() {
   const { data: session, status } = useSession();
@@ -16,6 +25,8 @@ export default function ChatsPage() {
   const [messages, setMessages] = useState<IMessage[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [recentChats, setRecentChats] = useState<string[]>([]);
+
+  const messageEndRef = useRef<HTMLDivElement>(null);
 
   const currentUser = session?.user?.name || "";
 
@@ -31,7 +42,9 @@ export default function ChatsPage() {
         const res = await fetch(`/api/users/search?q=${searchQuery}`);
         if (res.ok) {
           const data = await res.json();
-          setSearchResults(data.filter((u: User) => u.username !== currentUser));
+          setSearchResults(
+            data.filter((u: User) => u.username !== currentUser),
+          );
         }
       } else {
         setSearchResults([]);
@@ -41,18 +54,57 @@ export default function ChatsPage() {
   }, [searchQuery, currentUser]);
 
   useEffect(() => {
-    if (selectedUser && currentUser) {
-      const fetchMsgs = async () => {
-        const res = await fetch(`/api/messages?user1=${currentUser}&user2=${selectedUser.username}`);
-        if (res.ok) {
-          setMessages(await res.json());
+  let isMounted = true; // Флаг для предотвращения обновлений на размонтированном компоненте
+
+  if (selectedUser && currentUser) {
+    const fetchMsgs = async () => {
+      try {
+        const res = await fetch(
+          `/api/messages?user1=${currentUser}&user2=${selectedUser.username}`
+        );
+        
+        if (res.ok && isMounted) {
+          const data: IMessage[] = await res.json();
+          setMessages(data);
+
+          if (data.length > 0) {
+            const lastMsg = data[data.length - 1];
+
+            // Если последнее сообщение от собеседника и оно не прочитано
+            if (lastMsg.sender !== currentUser && !lastMsg.seen) {
+              console.log("Отправляю запрос на чтение...");
+              
+              const resRead = await fetch("/api/messages/read", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  sender: selectedUser.username,
+                  receiver: currentUser,
+                }),
+              });
+
+              if (resRead.ok && isMounted) {
+                // ОПТИМИЗМ: Сразу помечаем сообщения как прочитанные в стейте,
+                // чтобы не ждать следующего fetchMsgs
+                setMessages(prev => prev.map(m => ({ ...m, seen: true })));
+              }
+            }
+          }
         }
-      };
-      fetchMsgs();
-      const interval = setInterval(fetchMsgs, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedUser, currentUser]);
+      } catch (err) {
+        console.error("Ошибка загрузки сообщений:", err);
+      }
+    };
+
+    fetchMsgs();
+    const interval = setInterval(fetchMsgs, 3000);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }
+}, [selectedUser, currentUser]);
 
   useEffect(() => {
     if (currentUser) {
@@ -69,9 +121,19 @@ export default function ChatsPage() {
     }
   }, [currentUser]);
 
+  useEffect(() => {
+    if (messageEndRef.current) {
+      messageEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedUser || !currentUser) return;
-    const body = { sender: currentUser, receiver: selectedUser.username, text: newMessage };
+    const body = {
+      sender: currentUser,
+      receiver: selectedUser.username,
+      text: newMessage,
+    };
     try {
       const res = await fetch("/api/messages", {
         method: "POST",
@@ -80,7 +142,10 @@ export default function ChatsPage() {
       });
       if (res.ok) {
         setNewMessage("");
-        setMessages((prev) => [...prev, { ...body, timestamp: new Date().toISOString() }]);
+        setMessages((prev) => [
+          ...prev,
+          { ...body, timestamp: new Date().toISOString() },
+        ]);
       }
     } catch (error) {
       console.error(error);
@@ -102,13 +167,15 @@ export default function ChatsPage() {
     <div className="flex h-screen bg-black text-white font-sans">
       <aside className="w-80 bg-[#121212] m-2 rounded-2xl border border-gray-800 flex flex-col">
         <div className="p-4 border-b border-gray-800">
-          <p className="text-xs text-gray-500 uppercase font-bold">Logged in as</p>
+          <p className="text-xs text-gray-500 uppercase font-bold">
+            Logged in as
+          </p>
           <p className="text-blue-400 font-medium">{currentUser}</p>
         </div>
-        
-        <input 
-          className="m-4 p-3 bg-[#1e1e1e] rounded-xl outline-none border border-transparent focus:border-blue-600 transition" 
-          placeholder="Search users..." 
+
+        <input
+          className="m-4 p-3 bg-[#1e1e1e] rounded-xl outline-none border border-transparent focus:border-blue-600 transition"
+          placeholder="Search users..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -118,13 +185,15 @@ export default function ChatsPage() {
           {searchQuery.trim() === "" ? (
             // ПОКАЗЫВАЕМ НЕДАВНИЕ ЧАТЫ
             <>
-              <p className="px-3 py-2 text-[10px] text-gray-500 uppercase tracking-widest font-bold">Recent Chats</p>
+              <p className="px-3 py-2 text-[10px] text-gray-500 uppercase tracking-widest font-bold">
+                Recent Chats
+              </p>
               {recentChats.length > 0 ? (
                 recentChats.map((username) => (
-                  <div 
-                    key={username} 
-                    onClick={() => setSelectedUser({ _id: username, username })} 
-                    className={`p-3 mb-1 rounded-xl cursor-pointer hover:bg-[#1e1e1e] transition ${selectedUser?.username === username ? 'bg-[#1e1e1e] border border-gray-700' : 'border border-transparent'}`}
+                  <div
+                    key={username}
+                    onClick={() => setSelectedUser({ _id: username, username })}
+                    className={`p-3 mb-1 rounded-xl cursor-pointer hover:bg-[#1e1e1e] transition ${selectedUser?.username === username ? "bg-[#1e1e1e] border border-gray-700" : "border border-transparent"}`}
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-900 flex items-center justify-center text-xs">
@@ -141,10 +210,12 @@ export default function ChatsPage() {
           ) : (
             // ПОКАЗЫВАЕМ РЕЗУЛЬТАТЫ ПОИСКА
             <>
-              <p className="px-3 py-2 text-[10px] text-gray-500 uppercase tracking-widest font-bold">Search Results</p>
-              {searchResults.map(user => (
-                <div 
-                  key={user._id} 
+              <p className="px-3 py-2 text-[10px] text-gray-500 uppercase tracking-widest font-bold">
+                Search Results
+              </p>
+              {searchResults.map((user) => (
+                <div
+                  key={user._id}
                   onClick={() => {
                     setSelectedUser(user);
                     setSearchQuery(""); // Очищаем поиск после выбора
@@ -172,23 +243,36 @@ export default function ChatsPage() {
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {messages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.sender === currentUser ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`p-3 rounded-2xl max-w-[70%] shadow-sm ${msg.sender === currentUser ? 'bg-blue-600 text-white' : 'bg-[#1e1e1e] text-gray-200'}`}>
+                <div
+                  key={i}
+                  className={`flex ${msg.sender === currentUser ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`p-3 rounded-2xl max-w-[70%] shadow-sm ${msg.sender === currentUser ? "bg-blue-600 text-white" : "bg-[#1e1e1e] text-gray-200"}`}
+                  >
                     {msg.text}
+
+                    {msg.sender === currentUser && (
+                      <div className="text-[10px] text-right mt-1 opacity-70">
+                        {msg.seen ? "✓✓" : "✓"}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
+
+              <div ref={messageEndRef} />
             </div>
             <div className="p-4 bg-[#121212] flex gap-2">
-              <input 
-                className="flex-1 bg-[#1e1e1e] p-3 rounded-xl outline-none border border-transparent focus:border-gray-700 transition" 
-                value={newMessage} 
+              <input
+                className="flex-1 bg-[#1e1e1e] p-3 rounded-xl outline-none border border-transparent focus:border-gray-700 transition"
+                value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                onKeyDown={(e) => e.key === "Enter" && sendMessage()}
                 placeholder="Write a message..."
               />
-              <button 
-                onClick={sendMessage} 
+              <button
+                onClick={sendMessage}
                 className="bg-blue-600 px-6 rounded-xl hover:bg-blue-500 active:scale-95 transition-all font-medium"
               >
                 Send
@@ -197,7 +281,9 @@ export default function ChatsPage() {
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-600">
-            <div className="w-16 h-16 bg-[#121212] rounded-full mb-4 flex items-center justify-center text-2xl">💬</div>
+            <div className="w-16 h-16 bg-[#121212] rounded-full mb-4 flex items-center justify-center text-2xl">
+              💬
+            </div>
             <p>Select a user to start chatting</p>
           </div>
         )}
