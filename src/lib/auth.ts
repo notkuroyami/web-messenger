@@ -1,10 +1,10 @@
-import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import connectDB from "@/lib/db";
 import User from "@/models/User";
 import bcrypt from "bcrypt";
+import { AuthOptions } from "next-auth";
 
-export const authOptions = {
+export const authOptions: AuthOptions = {
   providers: [
     CredentialsProvider({
       name: "Credentials",
@@ -13,6 +13,7 @@ export const authOptions = {
         password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
+        if (!credentials) return null;
         await connectDB();
         const user = await User.findOne({ email: credentials.email });
 
@@ -27,6 +28,3 @@ export const authOptions = {
   secret: process.env.NEXTAUTH_SECRET,
   pages: { signIn: "/login" },
 };
-
-const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST };
