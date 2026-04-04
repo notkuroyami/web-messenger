@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useSession } from "next-auth/react";
+import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import io, { Socket } from "socket.io-client";
 
@@ -47,36 +47,41 @@ export default function ChatsPage() {
   const currentUser = session?.user?.name || "";
   const getRoomId = (u1: string, u2: string) => [u1, u2].sort().join("-");
 
-  const markAllAsRead = useCallback(async (senderName: string) => {
-    if (!senderName || !currentUser || !document.hasFocus()) return;
+  const markAllAsRead = useCallback(
+    async (senderName: string) => {
+      if (!senderName || !currentUser || !document.hasFocus()) return;
 
-    try {
-      const res = await fetch("/api/messages/read", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender: senderName,
-          receiver: currentUser,
-        }),
-      });
+      try {
+        const res = await fetch("/api/messages/read", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: senderName,
+            receiver: currentUser,
+          }),
+        });
 
-      if (res.ok) {
-        setMessages((prev) =>
-          prev.map((m) => (m.sender === senderName ? { ...m, seen: true } : m))
-        );
+        if (res.ok) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.sender === senderName ? { ...m, seen: true } : m,
+            ),
+          );
 
-        if (socket) {
-          const roomId = getRoomId(currentUser, senderName);
-          socket.emit("mark-as-read", {
-            chatId: roomId,
-            reader: currentUser,
-          });
+          if (socket) {
+            const roomId = getRoomId(currentUser, senderName);
+            socket.emit("mark-as-read", {
+              chatId: roomId,
+              reader: currentUser,
+            });
+          }
         }
+      } catch (err) {
+        console.error("Error marking messages as read:", err);
       }
-    } catch (err) {
-      console.error("Error marking messages as read:", err);
-    }
-  }, [currentUser]);
+    },
+    [currentUser],
+  );
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
@@ -107,8 +112,10 @@ export default function ChatsPage() {
             } else if (data.type === "update") {
               setMessages((prev) =>
                 prev.map((m) =>
-                  m._id === data._id ? { ...m, text: data.text, isEdited: true } : m
-                )
+                  m._id === data._id
+                    ? { ...m, text: data.text, isEdited: true }
+                    : m,
+                ),
               );
             } else {
               setMessages((prev) => [...prev, data]);
@@ -122,24 +129,34 @@ export default function ChatsPage() {
         socket.on("messages-read-update", (data: { reader: string }) => {
           if (selectedUserRef.current?.username === data.reader) {
             setMessages((prev) =>
-              prev.map((m) => (m.sender !== data.reader ? { ...m, seen: true } : m))
+              prev.map((m) =>
+                m.sender !== data.reader ? { ...m, seen: true } : m,
+              ),
             );
           }
         });
 
-        socket.on("user-typing", (data: { username: string; isTyping: boolean }) => {
-          if (selectedUserRef.current?.username === data.username) {
-            setIsPeerTyping(data.isTyping);
-          }
-        });
+        socket.on(
+          "user-typing",
+          (data: { username: string; isTyping: boolean }) => {
+            if (selectedUserRef.current?.username === data.username) {
+              setIsPeerTyping(data.isTyping);
+            }
+          },
+        );
 
-        socket.on("update-status", (data: { username: string; online: boolean }) => {
-          setOnlineUsers((prev) => {
-            const next = new Set(prev);
-            data.online ? next.add(data.username) : next.delete(data.username);
-            return next;
-          });
-        });
+        socket.on(
+          "update-status",
+          (data: { username: string; online: boolean }) => {
+            setOnlineUsers((prev) => {
+              const next = new Set(prev);
+              data.online
+                ? next.add(data.username)
+                : next.delete(data.username);
+              return next;
+            });
+          },
+        );
       }
     };
 
@@ -183,7 +200,9 @@ export default function ChatsPage() {
         const res = await fetch(`/api/users/search?q=${searchQuery}`);
         if (res.ok) {
           const data = await res.json();
-          setSearchResults(data.filter((u: User) => u.username !== currentUser));
+          setSearchResults(
+            data.filter((u: User) => u.username !== currentUser),
+          );
         }
       } else {
         setSearchResults([]);
@@ -199,7 +218,7 @@ export default function ChatsPage() {
       const fetchMsgs = async () => {
         try {
           const res = await fetch(
-            `/api/messages?user1=${currentUser}&user2=${selectedUser.username}`
+            `/api/messages?user1=${currentUser}&user2=${selectedUser.username}`,
           );
           if (res.ok && isMounted) {
             const data: IMessage[] = await res.json();
@@ -212,7 +231,9 @@ export default function ChatsPage() {
       };
       fetchMsgs();
     }
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, [selectedUser, currentUser, markAllAsRead]);
 
   // 6. Recent
@@ -235,8 +256,10 @@ export default function ChatsPage() {
     if (!container) return;
 
     // Проверка: находится ли юзер внизу (с допуском 100px)
-    const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
-    
+    const isAtBottom =
+      container.scrollHeight - container.scrollTop <=
+      container.clientHeight + 100;
+
     const lastMessage = messages[messages.length - 1];
     const iAmSender = lastMessage?.sender === currentUser;
 
@@ -249,11 +272,19 @@ export default function ChatsPage() {
   const handleTyping = () => {
     if (!socket || !selectedUser) return;
     const roomId = getRoomId(currentUser, selectedUser.username);
-    socket.emit("typing", { chatId: roomId, username: currentUser, isTyping: true });
+    socket.emit("typing", {
+      chatId: roomId,
+      username: currentUser,
+      isTyping: true,
+    });
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
-      socket?.emit("typing", { chatId: roomId, username: currentUser, isTyping: false });
+      socket?.emit("typing", {
+        chatId: roomId,
+        username: currentUser,
+        isTyping: false,
+      });
     }, 2000);
   };
 
@@ -268,8 +299,16 @@ export default function ChatsPage() {
         body: JSON.stringify({ text: newMessage }),
       });
       if (res.ok) {
-        const updated = { ...editingMessage, text: newMessage, isEdited: true, type: "update", chatId: roomId } as IMessage;
-        setMessages((prev) => prev.map((m) => (m._id === editingMessage._id ? updated : m)));
+        const updated = {
+          ...editingMessage,
+          text: newMessage,
+          isEdited: true,
+          type: "update",
+          chatId: roomId,
+        } as IMessage;
+        setMessages((prev) =>
+          prev.map((m) => (m._id === editingMessage._id ? updated : m)),
+        );
         socket?.emit("send-message", updated);
         setEditingMessage(null);
         setNewMessage("");
@@ -278,7 +317,11 @@ export default function ChatsPage() {
       const res = await fetch("/api/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender: currentUser, receiver: selectedUser.username, text: newMessage }),
+        body: JSON.stringify({
+          sender: currentUser,
+          receiver: selectedUser.username,
+          text: newMessage,
+        }),
       });
       if (res.ok) {
         const saved = await res.json();
@@ -286,7 +329,11 @@ export default function ChatsPage() {
         setMessages((prev) => [...prev, saved]);
         socket?.emit("send-message", socketMsg);
         setNewMessage("");
-        socket?.emit("typing", { chatId: roomId, username: currentUser, isTyping: false });
+        socket?.emit("typing", {
+          chatId: roomId,
+          username: currentUser,
+          isTyping: false,
+        });
       }
     }
   };
@@ -294,22 +341,58 @@ export default function ChatsPage() {
   const deleteMessage = async (messageId: string) => {
     if (!confirm("Удалить сообщение?") || !selectedUser || !socket) return;
     const roomId = getRoomId(currentUser, selectedUser.username);
-    const res = await fetch(`/api/messages?id=${messageId}`, { method: "DELETE" });
+    const res = await fetch(`/api/messages?id=${messageId}`, {
+      method: "DELETE",
+    });
     if (res.ok) {
       setMessages((prev) => prev.filter((m) => m._id !== messageId));
-      socket?.emit("send-message", { _id: messageId, chatId: roomId, type: "delete" });
+      socket?.emit("send-message", {
+        _id: messageId,
+        chatId: roomId,
+        type: "delete",
+      });
     }
   };
 
-  if (status === "loading") return <div className="h-screen bg-black text-white flex items-center justify-center">Загрузка...</div>;
+  if (status === "loading")
+    return (
+      <div className="h-screen bg-black text-white flex items-center justify-center">
+        Загрузка...
+      </div>
+    );
   if (!session) return null;
 
   return (
     <div className="flex h-screen bg-black text-white font-sans">
       <aside className="w-80 bg-[#121212] m-2 rounded-2xl border border-gray-800 flex flex-col">
-        <div className="p-4 border-b border-gray-800">
-          <p className="text-xs text-gray-500 uppercase font-bold text-[10px]">Logged in as</p>
-          <p className="text-blue-400 font-medium">{currentUser}</p>
+        <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#121212] rounded-t-2xl">
+          <div className="flex flex-col">
+            <p className="text-xs text-gray-500 uppercase font-bold text-[10px] select-none">
+            Logged in as
+          </p>
+          <p className="text-blue-400 font-medium select-none">{currentUser}</p>
+          </div>
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="w-s flex justify-self-end items-center justify-center gap-2 p-3 rounded-xl bg-red-900/20 text-red-500 hover:bg-red-900/40 border border-red-900/30 transition-all font-bold text-[10px] uppercase tracking-widest active:scale-95"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Logout
+          </button>
         </div>
         <input
           className="m-4 p-3 bg-[#1e1e1e] rounded-xl outline-none border border-transparent focus:border-blue-600 transition text-sm"
@@ -320,7 +403,9 @@ export default function ChatsPage() {
         <div className="flex-1 overflow-y-auto px-2">
           {searchQuery.trim() === "" ? (
             <>
-              <p className="px-3 py-2 text-[10px] text-gray-500 uppercase tracking-widest font-bold">Recent Chats</p>
+              <p className="px-3 py-2 text-[10px] text-gray-500 uppercase tracking-widest font-bold select-none">
+                Recent Chats
+              </p>
               {recentChats.map((username) => (
                 <div
                   key={username}
@@ -329,8 +414,12 @@ export default function ChatsPage() {
                 >
                   <div className="flex items-center gap-3">
                     <div className="relative">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-900 flex items-center justify-center text-[10px]">{username[0].toUpperCase()}</div>
-                      {onlineUsers.has(username) && <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-[#121212] rounded-full"></div>}
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-900 flex items-center justify-center text-[10px]">
+                        {username[0].toUpperCase()}
+                      </div>
+                      {onlineUsers.has(username) && (
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-[#121212] rounded-full"></div>
+                      )}
                     </div>
                     <span className="text-sm">{username}</span>
                   </div>
@@ -339,9 +428,18 @@ export default function ChatsPage() {
             </>
           ) : (
             searchResults.map((user) => (
-              <div key={user._id} onClick={() => { setSelectedUser(user); setSearchQuery(""); }} className="p-3 mb-1 rounded-xl cursor-pointer hover:bg-[#1e1e1e] transition border border-transparent">
+              <div
+                key={user._id}
+                onClick={() => {
+                  setSelectedUser(user);
+                  setSearchQuery("");
+                }}
+                className="p-3 mb-1 rounded-xl cursor-pointer hover:bg-[#1e1e1e] transition border border-transparent"
+              >
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-[10px]">?</div>
+                  <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-[10px]">
+                    ?
+                  </div>
                   <span className="text-sm">{user.username}</span>
                 </div>
               </div>
@@ -355,29 +453,66 @@ export default function ChatsPage() {
           <>
             <div className="p-4 border-b border-gray-800 bg-[#121212] flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <span className="font-bold text-lg">{selectedUser.username}</span>
-                {onlineUsers.has(selectedUser.username) && <span className="text-[15px] text-green-500 uppercase font-bold tracking-tighter">●</span>}
+                <span className="font-bold text-lg">
+                  {selectedUser.username}
+                </span>
+                {onlineUsers.has(selectedUser.username) && (
+                  <span className="text-[15px] text-green-500 uppercase font-bold tracking-tighter">
+                    ●
+                  </span>
+                )}
                 {isPeerTyping && (
-                <div className="flex justify-start">
-                  <div className="bg-[#1e1e1e] px-4 py-2 rounded-2xl text-[11px] text-blue-400 animate-pulse">typing...</div>
-                </div>
-              )}
+                  <div className="flex justify-start">
+                    <div className="bg-[#1e1e1e] px-4 py-2 rounded-2xl text-[11px] text-blue-400 animate-pulse">
+                      typing...
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-            {/* Добавлен ref=scrollContainerRef */}
-            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-y-auto p-4 space-y-3"
+            >
               {messages.map((msg) => (
-                <div key={msg._id} className={`flex ${msg.sender === currentUser ? "justify-end" : "justify-start"}`}>
-                  <div className={`group relative p-3 rounded-2xl max-w-[70%] shadow-sm transition-all ${msg.sender === currentUser ? "bg-blue-600 text-white" : "bg-[#1e1e1e] text-gray-200"}`}>
-                    <p className={`text-sm ${msg.isDeleted ? "italic opacity-50" : ""}`}>{msg.text}</p>
+                <div
+                  key={msg._id}
+                  className={`flex ${msg.sender === currentUser ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`group relative p-3 rounded-2xl max-w-[70%] shadow-sm transition-all ${msg.sender === currentUser ? "bg-blue-600 text-white" : "bg-[#1e1e1e] text-gray-200"}`}
+                  >
+                    <p
+                      className={`text-sm ${msg.isDeleted ? "italic opacity-50" : ""}`}
+                    >
+                      {msg.text}
+                    </p>
                     <div className="flex items-center justify-end gap-1 mt-1 opacity-60 text-[9px]">
-                      {msg.isEdited && !msg.isDeleted && <span className="italic mr-1">edited</span>}
-                      {msg.sender === currentUser && <span>{msg.seen ? "✓✓" : "✓"}</span>}
+                      {msg.isEdited && !msg.isDeleted && (
+                        <span className="italic mr-1">edited</span>
+                      )}
+                      {msg.sender === currentUser && (
+                        <span>{msg.seen ? "✓✓" : "✓"}</span>
+                      )}
                     </div>
                     {msg.sender === currentUser && !msg.isDeleted && (
                       <div className="absolute -left-14 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-[#121212] p-1 rounded-lg border border-gray-800 z-10">
-                        <button onClick={() => { setEditingMessage(msg); setNewMessage(msg.text); }} className="hover:text-blue-400 p-1 text-xs">✏️</button>
-                        <button onClick={() => deleteMessage(msg._id)} className="hover:text-red-500 p-1 text-xs">🗑️</button>
+                        <button
+                          onClick={() => {
+                            setEditingMessage(msg);
+                            setNewMessage(msg.text);
+                          }}
+                          className="hover:text-blue-400 p-1 text-xs"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => deleteMessage(msg._id)}
+                          className="hover:text-red-500 p-1 text-xs"
+                        >
+                          🗑️
+                        </button>
                       </div>
                     )}
                   </div>
@@ -389,18 +524,32 @@ export default function ChatsPage() {
               {editingMessage && (
                 <div className="flex justify-between items-center text-[10px] text-blue-400 px-2 font-bold uppercase tracking-widest">
                   <span>Editing Message</span>
-                  <button onClick={() => { setEditingMessage(null); setNewMessage(""); }} className="text-red-500 hover:underline">Cancel</button>
+                  <button
+                    onClick={() => {
+                      setEditingMessage(null);
+                      setNewMessage("");
+                    }}
+                    className="text-red-500 hover:underline"
+                  >
+                    Cancel
+                  </button>
                 </div>
               )}
               <div className="flex gap-2">
                 <input
                   className="flex-1 bg-[#1e1e1e] p-3 rounded-xl outline-none border border-transparent focus:border-gray-700 transition text-sm"
                   value={newMessage}
-                  onChange={(e) => { setNewMessage(e.target.value); handleTyping(); }}
+                  onChange={(e) => {
+                    setNewMessage(e.target.value);
+                    handleTyping();
+                  }}
                   onKeyDown={(e) => e.key === "Enter" && handleAction()}
                   placeholder="Write a message..."
                 />
-                <button onClick={handleAction} className={`${editingMessage ? "bg-green-600 hover:bg-green-500" : "bg-blue-600 hover:bg-blue-500"} px-6 rounded-xl transition-all font-bold text-xs uppercase tracking-widest active:scale-95`}>
+                <button
+                  onClick={handleAction}
+                  className={`${editingMessage ? "bg-green-600 hover:bg-green-500" : "bg-blue-600 hover:bg-blue-500"} px-6 rounded-xl transition-all font-bold text-xs uppercase tracking-widest active:scale-95`}
+                >
                   {editingMessage ? "Save" : "Send"}
                 </button>
               </div>
@@ -408,8 +557,12 @@ export default function ChatsPage() {
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-600">
-            <div className="w-16 h-16 bg-[#121212] rounded-full mb-4 flex items-center justify-center text-2xl">💬</div>
-            <p className="text-sm">Select a user to start chatting</p>
+            <div className="w-16 h-16 bg-[#121212] rounded-full mb-4 flex items-center justify-center text-2xl select-none">
+              💬
+            </div>
+            <p className="text-sm select-none">
+              Select a user to start chatting
+            </p>
           </div>
         )}
       </main>
