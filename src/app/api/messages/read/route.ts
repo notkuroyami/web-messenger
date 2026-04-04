@@ -1,36 +1,40 @@
 import { NextResponse } from "next/server";
-import dbConnect from "@/lib/db"; // Проверь путь к своему коннекту к БД
-import Message from "@/models/Message";
+import dbConnect from "@/lib/db"; // Проверь путь к БД
+import Message from "@/models/Message"; // Проверь путь к модели
 
 export async function PUT(req: Request) {
   try {
     await dbConnect();
+    const { sender, receiver } = await req.json();
 
-    // 1. Извлекаем данные из тела запроса (body)
-    const body = await req.json();
-    const { sender, receiver } = body;
-
-    // Проверка на наличие данных, чтобы не было undefined в запросе к БД
     if (!sender || !receiver) {
-      return NextResponse.json({ error: "Missing sender or receiver" }, { status: 400 });
+      return NextResponse.json(
+        { message: "Missing sender or receiver" },
+        { status: 400 },
+      );
     }
 
-    // 2. Выполняем обновление в базе
-    // Мы помечаем прочитанными те сообщения, которые пришли НАМ (receiver) ОТ НИХ (sender)
-    await Message.updateMany(
-      { 
-        sender: sender, 
-        receiver: receiver, 
-        seen: false 
+    // Обновляем сообщения в базе
+    const result = await Message.updateMany(
+      {
+        sender: sender,
+        receiver: receiver,
+        seen: false,
       },
-      { 
-        $set: { seen: true } 
-      }
+      {
+        $set: { seen: true },
+      },
     );
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      message: "Messages marked as read",
+      modifiedCount: result.modifiedCount,
+    });
   } catch (error) {
-    console.error("Ошибка при обновлении статуса прочитано:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    console.error("Error in API/MESSAGES/READ:", error);
+    return NextResponse.json(
+      { message: "Internal server error" },
+      { status: 500 },
+    );
   }
 }
