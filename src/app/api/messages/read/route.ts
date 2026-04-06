@@ -1,40 +1,21 @@
 import { NextResponse } from "next/server";
-import dbConnect from "@/lib/db"; // Проверь путь к БД
-import Message from "@/models/Message"; // Проверь путь к модели
+import connectDB from "@/lib/db";
+import Message from "@/models/Message";
 
-export async function PUT(req: Request) {
+export async function PATCH(req: Request) {
   try {
-    await dbConnect();
-    const { sender, receiver } = await req.json();
+    const { chatId, username } = await req.json();
+    await connectDB();
 
-    if (!sender || !receiver) {
-      return NextResponse.json(
-        { message: "Missing sender or receiver" },
-        { status: 400 },
-      );
-    }
-
-    // Обновляем сообщения в базе
-    const result = await Message.updateMany(
-      {
-        sender: sender,
-        receiver: receiver,
-        seen: false,
-      },
-      {
-        $set: { seen: true },
-      },
+    // Помечаем прочитанными все сообщения в этом чате, 
+    // где отправитель НЕ текущий пользователь
+    await Message.updateMany(
+      { chatId, sender: { $ne: username }, seen: false },
+      { $set: { seen: true } }
     );
 
-    return NextResponse.json({
-      message: "Messages marked as read",
-      modifiedCount: result.modifiedCount,
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Error in API/MESSAGES/READ:", error);
-    return NextResponse.json(
-      { message: "Internal server error" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Read update failed" }, { status: 500 });
   }
 }

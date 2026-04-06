@@ -1,14 +1,11 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema, model, models } from "mongoose";
 
-const MessageSchema = new mongoose.Schema({
-    sender: { type: String, required: true },
-    receiver: { type: String, required: true},
-    text: { type: String, required: true},
-    timestamp: { type: Date, default: Date.now },
-    seen: { type: Boolean, default: false},
-    isEdited: { type: Boolean, default: false },
-    isDeleted: { type: Boolean, default: false },
-    content: { type: String },
+const MessageSchema = new Schema({
+  sender: { type: String, required: true },
+  chatId: { type: String, required: true }, // ID чата или группы
+  text: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now },
+  seen: { type: Boolean, default: false },
 });
 
-export default mongoose.models.Message || mongoose.model("Message", MessageSchema);
+export default models.Message || model("Message", MessageSchema);

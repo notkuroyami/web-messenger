@@ -1,26 +1,22 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/db";
-import User from "@/models/User";
+import User from "@/models/User"; // Твоя модель пользователя
 
 export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const query = searchParams.get("q");
+  const { searchParams } = new URL(req.url);
+  const query = searchParams.get("query");
 
-    if (!query) return NextResponse.json([]);
+  if (!query) return NextResponse.json([]);
 
-    await connectDB();
+  await connectDB();
 
-    // Ищем пользователей, чье имя содержит поисковый запрос
-    const users = await User.find({
-      username: { $regex: query, $options: "i" },
-    })
-      .select("username _id email") 
-      .limit(10);
+  // Поиск пользователей, чье имя содержит query (без учета регистра)
+  // Исключаем текущего пользователя, если нужно (добавь фильтр по сессии)
+  const users = await User.find({
+    username: { $regex: query, $options: "i" },
+  })
+    .limit(10)
+    .select("username _id");
 
-    return NextResponse.json(users);
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
-  }
+  return NextResponse.json(users);
 }
