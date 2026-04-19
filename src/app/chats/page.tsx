@@ -3,8 +3,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
 import io, { Socket } from "socket.io-client";
+import { initE2E, encryptMessage, decryptMessage } from "@/lib/crypto";
 
-// --- ИНТЕРФЕЙСЫ ---
+// Интерфейсы
 interface User {
   _id: string;
   username: string;
@@ -24,6 +25,41 @@ interface IChat {
   participants: string[];
 }
 
+// Обновленный компонент расшифровки с поддержкой кэша для своих сообщений
+const DecryptedText = ({
+  text,
+  currentUser,
+  sender,
+}: {
+  text: string;
+  currentUser: string;
+  sender: string;
+}) => {
+  const [decrypted, setDecrypted] = useState("🔒...");
+
+  useEffect(() => {
+    const attemptDecrypt = async () => {
+      if (!text.includes("|")) {
+        setDecrypted(text);
+        return;
+      }
+
+      const [forMe, forPartner] = text.split("|");
+      const targetCipher = sender === currentUser ? forMe : forPartner;
+
+      try {
+        const result = await decryptMessage(targetCipher, currentUser);
+        setDecrypted(result || "❌ Ошибка");
+      } catch (e) {
+        setDecrypted("🔒 Ошибка расшифровки");
+      }
+    };
+    attemptDecrypt();
+  }, [text, currentUser, sender]);
+
+  return <span>{decrypted}</span>;
+};
+
 let socket: Socket | null = null;
 
 export default function ChatsPage() {
@@ -31,7 +67,6 @@ export default function ChatsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<User[]>([]);
 
-  // --- НОВОЕ ДЛЯ ГРУПП ---
   const [isGroupMode, setIsGroupMode] = useState(false);
   const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
   const [groupName, setGroupName] = useState("");
@@ -44,6 +79,11 @@ export default function ChatsPage() {
   const [isWindowFocused, setIsWindowFocused] = useState(true);
   const [editingMessage, setEditingMessage] = useState<IMessage | null>(null);
 
+  // Кэш для хранения открытого текста отправленных сообщений в текущей сессии
+  const [sentMessagesCache, setSentMessagesCache] = useState<
+    Record<string, string>
+  >({});
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const isAtBottom = useRef(true);
@@ -55,7 +95,12 @@ export default function ChatsPage() {
     selectedChatRef.current = selectedChat;
   }, [selectedChat]);
 
-  // --- УМНЫЙ СКРОЛЛ ---
+  useEffect(() => {
+    if (status === "authenticated" && currentUser) {
+      initE2E(currentUser);
+    }
+  }, [status, currentUser]);
+
   const handleScroll = () => {
     const container = scrollContainerRef.current;
     if (container) {
@@ -74,7 +119,6 @@ export default function ChatsPage() {
     }
   }, [messages, currentUser]);
 
-  // --- ФОКУС ОКНА ---
   useEffect(() => {
     const onFocus = () => setIsWindowFocused(true);
     const onBlur = () => setIsWindowFocused(false);
@@ -86,7 +130,6 @@ export default function ChatsPage() {
     };
   }, []);
 
-  // --- ПОИСК ---
   useEffect(() => {
     const delayDebounceFn = setTimeout(() => {
       if (searchQuery.trim().length > 0) {
@@ -121,19 +164,6 @@ export default function ChatsPage() {
     fetchRecentChats();
   }, [fetchRecentChats]);
 
-  // --- ЛОГИКА ВЫБОРА / СОЗДАНИЯ ---
-  const handleUserSelection = (user: User) => {
-    if (isGroupMode) {
-      setSelectedUsers((prev) =>
-        prev.find((u) => u._id === user._id)
-          ? prev.filter((u) => u._id !== user._id)
-          : [...prev, user],
-      );
-    } else {
-      handleSelectUser(user.username);
-    }
-  };
-
   const createGroupChat = async () => {
     if (selectedUsers.length < 1 || !groupName.trim()) return;
     const res = await fetch("/api/chats", {
@@ -148,63 +178,143 @@ export default function ChatsPage() {
     if (res.ok) {
       const newChat = await res.json();
       setSelectedChat(newChat);
-      resetGroupView();
+      setIsGroupMode(false);
+      setSelectedUsers([]);
+      setGroupName("");
+      setSearchQuery("");
       fetchRecentChats();
     }
   };
 
-  const resetGroupView = () => {
-    setIsGroupMode(false);
-    setSelectedUsers([]);
-    setGroupName("");
-    setSearchQuery("");
-  };
-
   const markAsRead = useCallback(
     async (chatId: string) => {
-      if (!currentUser || !socket || !document.hasFocus()) return;
+      // Убираем лишние проверки, оставляем только самые необходимые
+      if (!currentUser || !socket) return;
+
       try {
         await fetch("/api/messages/read", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chatId, username: currentUser }),
         });
+
+        // Отправляем сигнал всем участникам, что мы прочитали сообщения
         socket.emit("mark-as-read", { chatId, reader: currentUser });
       } catch (err) {
-        console.error(err);
+        console.error("Read update error:", err);
       }
     },
     [currentUser],
   );
 
-  // --- УДАЛЕНИЕ / РЕДАКТИРОВАНИЕ ---
   const deleteMessage = async (messageId: string) => {
+    if (!confirm("Удалить сообщение?")) return;
+
     try {
       const res = await fetch(`/api/messages?messageId=${messageId}`, {
         method: "DELETE",
       });
+
       if (res.ok) {
+        // Уведомляем других через сокет
         socket?.emit("delete-message", {
           messageId,
           chatId: selectedChat?._id,
         });
+        // Удаляем у себя в интерфейсе
         setMessages((prev) => prev.filter((m) => m._id !== messageId));
       }
     } catch (err) {
-      console.error(err);
+      console.error("Delete error:", err);
     }
   };
 
-  const startEdit = (msg: IMessage) => {
+  const startEdit = async (msg: IMessage) => {
+    // Нам нужно расшифровать наше же сообщение из двойного шифра
+    if (msg.text.includes("|")) {
+      const [forMe] = msg.text.split("|");
+      const originalText = await decryptMessage(forMe, currentUser);
+      setNewMessage(originalText);
+    } else {
+      setNewMessage(msg.text);
+    }
+
     setEditingMessage(msg);
-    setNewMessage(msg.text);
   };
+
   const cancelEdit = () => {
     setEditingMessage(null);
     setNewMessage("");
   };
 
-  // --- SOCKET.IO ---
+  const handleAction = async () => {
+    if (!newMessage.trim() || !selectedChat || !socket) return;
+
+    let textToDatabase = newMessage;
+
+    // Логика шифрования (Double Encryption)
+    if (selectedChat.type === "direct") {
+      const partner = selectedChat.participants.find((p) => p !== currentUser);
+      try {
+        const resKey = await fetch(`/api/users/get-key?username=${partner}`);
+        const { publicKey: partnerKey } = await resKey.json();
+        const myPublicKey = localStorage.getItem(`publicKey_${currentUser}`);
+
+        if (partnerKey && myPublicKey) {
+          const encForPartner = await encryptMessage(newMessage, partnerKey);
+          const encForMe = await encryptMessage(newMessage, myPublicKey);
+          // Сохраняем в формате: МойШифр|ЕгоШифр
+          textToDatabase = `${encForMe}|${encForPartner}`;
+        }
+      } catch (e) {
+        console.error("Encryption error:", e);
+      }
+    }
+
+    if (editingMessage) {
+      // РЕДАКТИРОВАНИЕ
+      try {
+        const res = await fetch("/api/messages", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messageId: editingMessage._id,
+            text: textToDatabase, // Отправляем новый двойной шифр
+          }),
+        });
+
+        if (res.ok) {
+          const updated = await res.json();
+          socket.emit("update-message", updated);
+          // Обновляем локальный стейт сообщений
+          setMessages((prev) =>
+            prev.map((m) => (m._id === updated._id ? updated : m)),
+          );
+          cancelEdit();
+        }
+      } catch (err) {
+        console.error("Update error:", err);
+      }
+    } else {
+      // ОТПРАВКА НОВОГО
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sender: currentUser,
+          chatId: selectedChat._id,
+          text: textToDatabase,
+        }),
+      });
+
+      if (res.ok) {
+        const savedMsg = await res.json();
+        socket.emit("send-message", savedMsg);
+        setNewMessage("");
+      }
+    }
+  };
+
   useEffect(() => {
     if (!currentUser) return;
     const initSocket = async () => {
@@ -212,12 +322,18 @@ export default function ChatsPage() {
       if (!socket) {
         socket = io({ path: "/api/socket" });
         socket.on("receive-message", (data: IMessage) => {
+          // Проверяем, относится ли сообщение к текущему открытому чату
           if (data.chatId === selectedChatRef.current?._id) {
-            setMessages((prev) =>
-              prev.find((m) => m._id === data._id) ? prev : [...prev, data],
-            );
-            if (data.sender !== currentUser && document.hasFocus())
+            setMessages((prev) => {
+              // Предотвращаем дубликаты
+              if (prev.find((m) => m._id === data._id)) return prev;
+              return [...prev, data];
+            });
+
+            // ГЛАВНОЕ: Если окно в фокусе и это сообщение от собеседника — помечаем как прочитанное
+            if (data.sender !== currentUser && document.hasFocus()) {
               markAsRead(data.chatId);
+            }
           }
           fetchRecentChats();
         });
@@ -253,44 +369,6 @@ export default function ChatsPage() {
     initSocket();
   }, [currentUser, fetchRecentChats, markAsRead]);
 
-  // --- ОТПРАВКА ---
-  const handleAction = async () => {
-    if (!newMessage.trim() || !selectedChat || !socket) return;
-    if (editingMessage) {
-      const res = await fetch("/api/messages", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messageId: editingMessage._id,
-          text: newMessage,
-        }),
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        socket?.emit("update-message", updated);
-        setMessages((prev) =>
-          prev.map((m) => (m._id === updated._id ? updated : m)),
-        );
-        cancelEdit();
-      }
-    } else {
-      const res = await fetch("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender: currentUser,
-          chatId: selectedChat._id,
-          text: newMessage,
-        }),
-      });
-      if (res.ok) {
-        const savedMsg = await res.json();
-        socket.emit("send-message", savedMsg);
-        setNewMessage("");
-      }
-    }
-  };
-
   const handleTyping = () => {
     socket?.emit("typing", {
       chatId: selectedChat?._id,
@@ -306,6 +384,20 @@ export default function ChatsPage() {
       });
     }, 2000);
   };
+
+  useEffect(() => {
+    const handleFocus = () => {
+      if (
+        selectedChatRef.current &&
+        messages.some((m) => m.sender !== currentUser && !m.seen)
+      ) {
+        markAsRead(selectedChatRef.current._id);
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [currentUser, markAsRead, messages]);
 
   const handleSelectUser = async (targetUsername: string) => {
     const res = await fetch("/api/chats", {
@@ -323,15 +415,6 @@ export default function ChatsPage() {
       fetchRecentChats();
     }
   };
-
-  useEffect(() => {
-    if (isWindowFocused && selectedChat) {
-      const hasUnread = messages.some(
-        (m) => m.sender !== currentUser && !m.seen,
-      );
-      if (hasUnread) markAsRead(selectedChat._id);
-    }
-  }, [isWindowFocused, selectedChat, messages, currentUser, markAsRead]);
 
   useEffect(() => {
     if (selectedChat) {
@@ -387,7 +470,6 @@ export default function ChatsPage() {
           </button>
         </div>
 
-        {/* Инпуты поиска и создания группы */}
         <div className="flex flex-col gap-2 p-4 border-b border-gray-800">
           <input
             className="p-3 bg-[#1e1e1e] rounded-xl outline-none border border-transparent focus:border-blue-600 text-sm transition-all"
@@ -413,7 +495,10 @@ export default function ChatsPage() {
                   Create ({selectedUsers.length})
                 </button>
                 <button
-                  onClick={resetGroupView}
+                  onClick={() => {
+                    setIsGroupMode(false);
+                    setSelectedUsers([]);
+                  }}
                   className="bg-gray-800 px-4 py-2 rounded-lg text-[10px] font-bold uppercase"
                 >
                   Cancel
@@ -433,7 +518,17 @@ export default function ChatsPage() {
                 return (
                   <div
                     key={u._id}
-                    onClick={() => handleUserSelection(u)}
+                    onClick={() => {
+                      if (isGroupMode) {
+                        setSelectedUsers((prev) =>
+                          isSelected
+                            ? prev.filter((user) => user._id !== u._id)
+                            : [...prev, u],
+                        );
+                      } else {
+                        handleSelectUser(u.username);
+                      }
+                    }}
                     className={`p-3 rounded-xl cursor-pointer flex items-center justify-between transition-all ${isSelected ? "bg-blue-600/20 border border-blue-600/40" : "hover:bg-[#1e1e1e]"}`}
                   >
                     <div className="flex items-center gap-3">
@@ -444,7 +539,7 @@ export default function ChatsPage() {
                     </div>
                     {isGroupMode && (
                       <div
-                        className={`w-4 h-4 rounded border ${isSelected ? "bg-blue-500 border-blue-500" : "border-gray-600"}`}
+                        className={`w-4 h-4 rounded border ${isSelected ? "bg-blue-500" : "border-gray-600"}`}
                       >
                         {isSelected && "✓"}
                       </div>
@@ -462,44 +557,25 @@ export default function ChatsPage() {
               >
                 <div className="flex items-center gap-3">
                   <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center text-xs ${c.type === "group" ? "bg-indigo-600" : "bg-gradient-to-tr from-blue-600 to-indigo-900"}`}
+                    className={`w-8 h-8 rounded-full flex items-center justify-center text-xs ${c.type === "group" ? "bg-indigo-600" : "bg-blue-600"}`}
                   >
                     {getChatDisplayName(c)?.[0]}
                   </div>
                   <span className="text-sm font-medium">
                     {getChatDisplayName(c)}
                   </span>
-                  {c.type === "group" && (
-                    <span className="text-[8px] opacity-40 border px-1 rounded">
-                      GROUP
-                    </span>
-                  )}
                 </div>
               </div>
             ))
           )}
         </div>
 
-        {/* КНОПКА СОЗДАНИЯ ГРУППЫ (КРАСНЫЙ КРУГ) */}
         {!isGroupMode && (
           <button
             onClick={() => setIsGroupMode(true)}
-            className="absolute bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shadow-2xl transition-all active:scale-90 z-50 group"
+            className="absolute bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shadow-2xl active:scale-90"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-7 w-7 transition-transform group-hover:rotate-90"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2.5}
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
+            +
           </button>
         )}
       </aside>
@@ -514,8 +590,8 @@ export default function ChatsPage() {
                   {getChatDisplayName(selectedChat)}
                 </span>
                 {isPeerTyping && (
-                  <div className="text-[10px] text-blue-400 animate-pulse uppercase tracking-tighter">
-                    is typing...
+                  <div className="text-[10px] text-blue-400 animate-pulse">
+                    typing...
                   </div>
                 )}
               </div>
@@ -532,38 +608,47 @@ export default function ChatsPage() {
                   className={`flex group ${msg.sender === currentUser ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`relative p-3 rounded-2xl max-w-[70%] text-sm ${msg.sender === currentUser ? "bg-blue-600 rounded-tr-none" : "bg-[#1e1e1e] rounded-tl-none"}`}
+                    className={`relative p-3 rounded-2xl max-w-[70%] text-sm shadow-lg transition-all ${
+                      msg.sender === currentUser
+                        ? "bg-blue-600 ml-12"
+                        : "bg-[#1e1e1e] mr-12"
+                    }`}
                   >
-                    {selectedChat.type === "group" &&
-                      msg.sender !== currentUser && (
-                        <p className="text-[10px] text-blue-400 mb-1 font-bold">
-                          {msg.sender}
-                        </p>
-                      )}
+                    {/* Кнопки управления (видны только владельцу при наведении) */}
                     {msg.sender === currentUser && (
-                      <div className="absolute -top-8 right-0 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-[#121212] border border-gray-800 p-1 rounded-lg z-10">
+                      <div className="absolute -left-25 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => startEdit(msg)}
-                          className="p-1 hover:text-blue-400 text-[10px]"
+                          className="p-1.5 hover:bg-gray-800 rounded text-gray-400 hover:text-blue-400"
+                          title="Edit"
                         >
                           Edit
                         </button>
                         <button
                           onClick={() => deleteMessage(msg._id)}
-                          className="p-1 hover:text-red-400 text-[10px]"
+                          className="p-1.5 hover:bg-gray-800 rounded text-gray-400 hover:text-red-400"
+                          title="Delete"
                         >
-                          Del
+                          Delete
                         </button>
                       </div>
                     )}
-                    <p>{msg.text}</p>
-                    <div className="flex items-center justify-end gap-1 mt-1 opacity-40 text-[9px]">
+
+                    <DecryptedText
+                      text={msg.text}
+                      currentUser={currentUser}
+                      sender={msg.sender}
+                    />
+
+                    <div className="flex justify-end items-center gap-1 mt-1 opacity-40 text-[9px]">
                       {new Date(msg.timestamp).toLocaleTimeString([], {
                         hour: "2-digit",
                         minute: "2-digit",
                       })}
                       {msg.sender === currentUser && (
-                        <span>{msg.seen ? "✓✓" : "✓"}</span>
+                        <span className={msg.seen ? "text-blue-200" : ""}>
+                          {msg.seen ? " ✓✓" : " ✓"}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -574,34 +659,24 @@ export default function ChatsPage() {
 
             <div className="p-4 bg-[#121212] border-t border-gray-800 flex flex-col gap-2">
               {editingMessage && (
-                <div className="flex justify-between items-center bg-blue-600/10 p-2 rounded-lg border border-blue-600/30">
-                  <span className="text-[10px] text-blue-400 font-bold uppercase">
-                    Editing mode
-                  </span>
-                  <button
-                    onClick={cancelEdit}
-                    className="text-[10px] text-gray-400 hover:text-white"
-                  >
-                    Cancel
-                  </button>
+                <div className="flex justify-between text-[10px] text-blue-400 px-2 uppercase font-bold">
+                  Editing mode <button onClick={cancelEdit}>Cancel</button>
                 </div>
               )}
               <div className="flex gap-2">
                 <input
-                  className="flex-1 bg-[#1e1e1e] p-3 rounded-xl outline-none text-sm focus:ring-1 ring-blue-500/50 transition-all"
+                  className="flex-1 bg-[#1e1e1e] p-3 rounded-xl outline-none text-sm focus:ring-1 ring-blue-500"
                   value={newMessage}
                   onChange={(e) => {
                     setNewMessage(e.target.value);
                     handleTyping();
                   }}
                   onKeyDown={(e) => e.key === "Enter" && handleAction()}
-                  placeholder={
-                    editingMessage ? "Edit message..." : "Message..."
-                  }
+                  placeholder="Message..."
                 />
                 <button
                   onClick={handleAction}
-                  className="bg-blue-600 px-6 rounded-xl text-xs font-bold transition active:scale-95 shadow-lg shadow-blue-500/20"
+                  className="bg-blue-600 px-6 rounded-xl text-xs font-bold active:scale-95"
                 >
                   {editingMessage ? "SAVE" : "SEND"}
                 </button>
@@ -609,8 +684,8 @@ export default function ChatsPage() {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-700 text-sm italic">
-            Select a conversation or create a group
+          <div className="flex-1 flex items-center justify-center text-gray-700 italic text-sm">
+            Select a chat
           </div>
         )}
       </main>

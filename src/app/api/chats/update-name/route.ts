@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/db"; 
-import Chat from "@/models/Chat"; // Проверь путь к модели чата
+import Chat from "@/models/Chat";
 
 export async function PATCH(req: Request) {
   try {
@@ -12,7 +12,6 @@ export async function PATCH(req: Request) {
     }
 
     // Обновляем название чата в базе
-    // Если у тебя сейчас чаты привязаны к именам, позже заменим на ID
     const updatedChat = await Chat.findByIdAndUpdate(
       chatId,
       { name: newName },

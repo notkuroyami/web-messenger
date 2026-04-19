@@ -2,7 +2,7 @@
 
 import React, { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react"; // Импортируем signIn
+import { signIn } from "next-auth/react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -15,7 +15,7 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setMessage(""); // Сбрасываем ошибки
+    setMessage(""); 
 
     try {
       // Используем signIn из next-auth вместо обычного fetch
@@ -31,7 +31,7 @@ export default function LoginPage() {
         return;
       }
 
-      // Если вход успешен, запускаем твою анимацию
+      // Если вход успешен, запускаем анимацию
       setgreetingMsg(`Welcome back!`);
 
       const greeting = document.getElementById("greeting");
@@ -40,7 +40,6 @@ export default function LoginPage() {
         greeting.classList.add("opacity-100");
       }
 
-      // Через секунду переходим в чаты (теперь сессия активна!)
       setTimeout(() => router.push("/chats"), 1000);
     } catch (err) {
       console.error("Login error:", err);

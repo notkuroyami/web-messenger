@@ -19,7 +19,7 @@ export const authOptions = {
 
         await connectDB();
 
-        // Ищем пользователя в твоей базе по Email
+        // Ищем пользователя в базе по Email
         const user = await User.findOne({ email: credentials.email });
 
         if (!user) {
@@ -34,7 +34,6 @@ export const authOptions = {
         }
 
         // Возвращаем объект пользователя. 
-        // Поле "name" в NextAuth — это то, что мы выводим как username
         return {
           id: user._id.toString(),
           name: user.username,
@@ -49,7 +48,7 @@ export const authOptions = {
   pages: {
     signIn: "/login", // Куда редиректить, если нужна авторизация
   },
-  secret: process.env.NEXTAUTH_SECRET, // Должен быть в твоем .env.local
+  secret: process.env.NEXTAUTH_SECRET, // В .env.local
 };
 
 const handler = NextAuth(authOptions);

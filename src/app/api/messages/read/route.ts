@@ -7,8 +7,7 @@ export async function PATCH(req: Request) {
     const { chatId, username } = await req.json();
     await connectDB();
 
-    // Помечаем прочитанными все сообщения в этом чате, 
-    // где отправитель НЕ текущий пользователь
+    // Помечаем прочитанными все сообщения в этом чате, где отправитель не текущий пользователь
     await Message.updateMany(
       { chatId, sender: { $ne: username }, seen: false },
       { $set: { seen: true } }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import connectDB  from "@/lib/db";
 import Message from "@/models/Message";
 
-// ПОЛУЧЕНИЕ СООБЩЕНИЙ (GET)
+// Получение сообщений
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const chatId = searchParams.get("chatId");
@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   return NextResponse.json(messages);
 }
 
-// СОЗДАНИЕ (POST)
+// Создание
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   }
 }
 
-// РЕДАКТИРОВАНИЕ (PATCH)
+// Редактирование
 export async function PATCH(req: Request) {
   try {
     const { messageId, text } = await req.json(); // ID берем из тела
@@ -41,7 +41,7 @@ export async function PATCH(req: Request) {
   }
 }
 
-// УДАЛЕНИЕ (DELETE)
+// Удаление
 export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url);

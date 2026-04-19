@@ -25,27 +25,27 @@ const socketHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
     res.socket.server.io = io;
 
     io.on("connection", (socket) => {
-      // 1. Вход в комнату (чат или группа)
+      // Вход в комнату (чат или группа)
       socket.on("join-chat", (chatId) => {
         socket.join(chatId);
         console.log(`User joined room: ${chatId}`);
       });
 
-      // 2. Отправка сообщения ВСЕМ в комнате
+      // Отправка сообщения всем в комнате
       socket.on("send-message", (data) => {
         if (data.chatId) {
-          // Используем io.to, чтобы сообщение получили ВСЕ, включая отправителя (для синхронизации вкладок)
+          // Используем io.to, чтобы сообщение получили ВСЕ, включая отправителя
           io.to(data.chatId).emit("receive-message", data);
         }
       });
 
-      // 3. Статус прочтения
+      // Статус прочтения
       socket.on("mark-as-read", ({ chatId, reader }) => {
         // Рассылаем всем в этой комнате, что сообщения прочитаны пользователем reader
         socket.to(chatId).emit("messages-read-update", { chatId, reader });
       });
 
-      // 4. Печатает...
+      // Печатает...
       socket.on("typing", (data) => {
         if (data.chatId) {
           socket.to(data.chatId).emit("user-typing", data);

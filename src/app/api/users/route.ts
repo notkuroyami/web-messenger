@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import connectDB from "@/lib/db";
-import User from "@/models/User"; // Убедись, что путь к модели User верный
+import User from "@/models/User";
 
 export async function GET(req: Request) {
   try {
