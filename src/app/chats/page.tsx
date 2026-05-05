@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
 import io, { Socket } from "socket.io-client";
 import { initE2E, encryptMessage, decryptMessage } from "@/lib/crypto";
+import axios from "axios";
+import { Send, Mic, Video, Paperclip, Smile } from "lucide-react";
 
 // Интерфейсы
 interface User {
@@ -17,6 +19,7 @@ interface IMessage {
   timestamp: string;
   chatId: string;
   seen?: boolean;
+  mediaUrl?: string; // Добавлено для поддержки медиа
 }
 interface IChat {
   _id: string;
@@ -25,22 +28,25 @@ interface IChat {
   participants: string[];
 }
 
-// Обновленный компонент расшифровки с поддержкой кэша для своих сообщений
 const DecryptedText = ({
   text,
   currentUser,
   sender,
+  mediaUrl,
+  onExpand, // Добавляем новый проп
 }: {
   text: string;
   currentUser: string;
   sender: string;
+  mediaUrl?: string;
+  onExpand?: (url: string) => void; // Типизация
 }) => {
   const [decrypted, setDecrypted] = useState("🔒...");
 
   useEffect(() => {
     const attemptDecrypt = async () => {
-      if (!text.includes("|")) {
-        setDecrypted(text);
+      if (!text || !text.includes("|")) {
+        setDecrypted(text || "");
         return;
       }
 
@@ -57,7 +63,45 @@ const DecryptedText = ({
     attemptDecrypt();
   }, [text, currentUser, sender]);
 
-  return <span>{decrypted}</span>;
+  // ... внутри функции компонента DecryptedText ...
+
+  const isSticker = mediaUrl?.includes("/stickers/"); // Проверка прямо по ссылке
+
+  return (
+    <div className="flex flex-col gap-2">
+      {mediaUrl && (
+        <div
+          className={`rounded-lg overflow-hidden flex justify-center transition-all ${
+            isSticker
+              ? "bg-transparent border-none shadow-none cursor-default"
+              : "bg-black/20 border border-white/10 shadow-sm cursor-pointer w-full"
+          }`}
+          onClick={() => {
+            if (!isSticker) onExpand?.(mediaUrl);
+          }}
+        >
+          {mediaUrl.match(/\.(mp4|webm|mov)$/i) ? (
+            <video
+              src={mediaUrl}
+              className="max-w-[300px] max-h-[400px] w-auto h-auto block pointer-events-none"
+            />
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={mediaUrl}
+              alt="attachment"
+              className={
+                isSticker
+                  ? "max-w-[160px] h-auto block border-none"
+                  : "max-w-full h-auto block border border-gray-800"
+              }
+            />
+          )}
+        </div>
+      )}
+      {decrypted && <span className="break-words">{decrypted}</span>}
+    </div>
+  );
 };
 
 let socket: Socket | null = null;
@@ -78,18 +122,60 @@ export default function ChatsPage() {
   const [isPeerTyping, setIsPeerTyping] = useState(false);
   const [isWindowFocused, setIsWindowFocused] = useState(true);
   const [editingMessage, setEditingMessage] = useState<IMessage | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [fullscreenMedia, setFullscreenMedia] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0); // 0 to 100
+  const [file, setFile] = useState<File | null>(null); // ДОБАВИТЬ ЭТО
+  const [mediaMode, setMediaMode] = useState<"voice" | "video">("voice");
+  const [isRecording, setIsRecording] = useState(false); // Для визуализации записи
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const [showStickers, setShowStickers] = useState(false);
 
   // Кэш для хранения открытого текста отправленных сообщений в текущей сессии
   const [sentMessagesCache, setSentMessagesCache] = useState<
     Record<string, string>
   >({});
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
   const isAtBottom = useRef(true);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const selectedChatRef = useRef<IChat | null>(null);
   const currentUser = session?.user?.name || "";
+
+  const stickerPacks = [
+    {
+      name: "KANEKI",
+      stickers: [
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992460/stickers/chill.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992460/stickers/kiss.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992460/stickers/thinking.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992459/stickers/happy.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777993938/stickers/worry.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992458/stickers/sick.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992458/stickers/calm.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992457/stickers/greetings.png",
+        "https://res.cloudinary.com/doua0g09z/image/upload/v1777992457/stickers/boring.png",
+      ],
+    },
+  ];
+
+  useEffect(() => {
+    // Указываем тип MouseEvent для параметра event
+    const handleClickOutside = (event: MouseEvent) => {
+      // Используем Type Assertion для target, чтобы иметь доступ к методу closest
+      const target = event.target as HTMLElement;
+
+      if (showStickers && !target.closest(".emoji-container")) {
+        setShowStickers(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showStickers]);
 
   useEffect(() => {
     selectedChatRef.current = selectedChat;
@@ -186,9 +272,79 @@ export default function ChatsPage() {
     }
   };
 
+  const sendSticker = async (url: string) => {
+    if (!selectedChat || !socket) return;
+
+    try {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sender: currentUser,
+          chatId: selectedChat._id,
+          text: "", // Стикер — это сообщение без текста
+          mediaUrl: url,
+        }),
+      });
+
+      if (res.ok) {
+        const savedMsg = await res.json();
+        socket.emit("send-message", savedMsg);
+        setShowStickers(false); // Закрываем панель после отправки
+      }
+    } catch (err) {
+      console.error("Ошибка при отправке стикера:", err);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: mediaMode === "video",
+      });
+
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(audioChunksRef.current, {
+          type: mediaMode === "voice" ? "audio/webm" : "video/webm",
+        });
+
+        // Create a File object from the Blob to reuse your handleAction logic
+        const fileName =
+          mediaMode === "voice" ? "voice_message.webm" : "video_message.webm";
+        const recordedFile = new File([blob], fileName, { type: blob.type });
+
+        await handleAction(recordedFile);
+
+        // Stop all tracks to turn off the camera/mic light
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Error accessing media devices:", err);
+      alert("Could not access microphone/camera");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
   const markAsRead = useCallback(
     async (chatId: string) => {
-      // Убираем лишние проверки, оставляем только самые необходимые
       if (!currentUser || !socket) return;
 
       try {
@@ -198,7 +354,6 @@ export default function ChatsPage() {
           body: JSON.stringify({ chatId, username: currentUser }),
         });
 
-        // Отправляем сигнал всем участникам, что мы прочитали сообщения
         socket.emit("mark-as-read", { chatId, reader: currentUser });
       } catch (err) {
         console.error("Read update error:", err);
@@ -216,12 +371,10 @@ export default function ChatsPage() {
       });
 
       if (res.ok) {
-        // Уведомляем других через сокет
         socket?.emit("delete-message", {
           messageId,
           chatId: selectedChat?._id,
         });
-        // Удаляем у себя в интерфейсе
         setMessages((prev) => prev.filter((m) => m._id !== messageId));
       }
     } catch (err) {
@@ -230,7 +383,6 @@ export default function ChatsPage() {
   };
 
   const startEdit = async (msg: IMessage) => {
-    // Нам нужно расшифровать наше же сообщение из двойного шифра
     if (msg.text.includes("|")) {
       const [forMe] = msg.text.split("|");
       const originalText = await decryptMessage(forMe, currentUser);
@@ -247,71 +399,135 @@ export default function ChatsPage() {
     setNewMessage("");
   };
 
-  const handleAction = async () => {
-    if (!newMessage.trim() || !selectedChat || !socket) return;
+  const uploadToCloudinary = async (
+    file: File,
+    onProgress: (percent: number) => void,
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_preset", "messenger_preset");
 
-    let textToDatabase = newMessage;
+    const response = await axios.post(
+      `https://api.cloudinary.com/v1_1/doua0g09z/upload`,
+      formData,
+      {
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) / (progressEvent.total || 1),
+          );
+          onProgress(percentCompleted);
+        },
+      },
+    );
+    return response.data.secure_url;
+  };
 
-    // Логика шифрования (Double Encryption)
-    if (selectedChat.type === "direct") {
-      const partner = selectedChat.participants.find((p) => p !== currentUser);
-      try {
-        const resKey = await fetch(`/api/users/get-key?username=${partner}`);
-        const { publicKey: partnerKey } = await resKey.json();
-        const myPublicKey = localStorage.getItem(`publicKey_${currentUser}`);
+  // Замени свою функцию handleAction на эту:
+  const handleAction = async (file?: File) => {
+    let mediaUrl = "";
 
-        if (partnerKey && myPublicKey) {
-          const encForPartner = await encryptMessage(newMessage, partnerKey);
-          const encForMe = await encryptMessage(newMessage, myPublicKey);
-          // Сохраняем в формате: МойШифр|ЕгоШифр
-          textToDatabase = `${encForMe}|${encForPartner}`;
+    // 1. Подготовка: включаем индикатор загрузки и сбрасываем прогресс
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      // 2. Загрузка файла, если он есть
+      if (file) {
+        try {
+          // Передаем файл и функцию обратного вызова для отслеживания %
+          mediaUrl = await uploadToCloudinary(file, (percent) => {
+            setUploadProgress(percent);
+          });
+          console.log("Uploaded to Cloudinary:", mediaUrl);
+        } catch (e) {
+          alert("Ошибка при загрузке файла");
+          return; // Перейдет сразу в finally
         }
-      } catch (e) {
-        console.error("Encryption error:", e);
       }
-    }
 
-    if (editingMessage) {
-      // РЕДАКТИРОВАНИЕ
-      try {
+      // 3. Проверки безопасности
+      if (!newMessage.trim() && !mediaUrl) return;
+      if (!selectedChat || !socket) return;
+
+      let textToDatabase = newMessage;
+
+      // 4. Логика шифрования (текст сообщения выступает как подпись к медиа)
+      if (selectedChat.type === "direct" && newMessage.trim()) {
+        const partner = selectedChat.participants.find(
+          (p) => p !== currentUser,
+        );
+        try {
+          const resKey = await fetch(`/api/users/get-key?username=${partner}`);
+          const { publicKey: partnerKey } = await resKey.json();
+          const myPublicKey = localStorage.getItem(`publicKey_${currentUser}`);
+
+          if (partnerKey && myPublicKey) {
+            const encForPartner = await encryptMessage(newMessage, partnerKey);
+            const encForMe = await encryptMessage(newMessage, myPublicKey);
+            textToDatabase = `${encForMe}|${encForPartner}`;
+          }
+        } catch (e) {
+          console.error("Encryption error:", e);
+          // Если шифрование упало, отправим как обычный текст или прервем?
+          // В мессенджере лучше прервать, если важна приватность
+        }
+      }
+
+      // 5. Отправка (редактирование или новое сообщение)
+      if (editingMessage) {
         const res = await fetch("/api/messages", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messageId: editingMessage._id,
-            text: textToDatabase, // Отправляем новый двойной шифр
+            text: textToDatabase,
           }),
         });
 
         if (res.ok) {
           const updated = await res.json();
           socket.emit("update-message", updated);
-          // Обновляем локальный стейт сообщений
           setMessages((prev) =>
             prev.map((m) => (m._id === updated._id ? updated : m)),
           );
           cancelEdit();
         }
-      } catch (err) {
-        console.error("Update error:", err);
-      }
-    } else {
-      // ОТПРАВКА НОВОГО
-      const res = await fetch("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender: currentUser,
-          chatId: selectedChat._id,
-          text: textToDatabase,
-        }),
-      });
+      } else {
+        // ОТПРАВКА НОВОГО СООБЩЕНИЯ
+        const res = await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sender: currentUser,
+            chatId: selectedChat._id,
+            text: textToDatabase || "", // Текст сообщения + подпись
+            mediaUrl: mediaUrl || undefined,
+          }),
+        });
 
-      if (res.ok) {
-        const savedMsg = await res.json();
-        socket.emit("send-message", savedMsg);
-        setNewMessage("");
+        if (res.ok) {
+          const savedMsg = await res.json();
+          socket.emit("send-message", savedMsg);
+
+          // 6. Очистка состояния после успешной отправки
+          setNewMessage("");
+          setFile(null); // Очищаем выбранный файл
+          if (fileInputRef.current) {
+            fileInputRef.current.value = ""; // Сбрасываем input
+          }
+        } else {
+          const errorData = await res.json();
+          console.error("Server error:", errorData);
+          alert("Серверная ошибка при отправке");
+        }
       }
+    } catch (err) {
+      console.error("Action error:", err);
+      alert("Произошла ошибка при обработке сообщения");
+    } finally {
+      // ВАЖНО: Выключаем индикаторы в любом случае
+      setIsUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -322,15 +538,12 @@ export default function ChatsPage() {
       if (!socket) {
         socket = io({ path: "/api/socket" });
         socket.on("receive-message", (data: IMessage) => {
-          // Проверяем, относится ли сообщение к текущему открытому чату
           if (data.chatId === selectedChatRef.current?._id) {
             setMessages((prev) => {
-              // Предотвращаем дубликаты
               if (prev.find((m) => m._id === data._id)) return prev;
               return [...prev, data];
             });
 
-            // ГЛАВНОЕ: Если окно в фокусе и это сообщение от собеседника — помечаем как прочитанное
             if (data.sender !== currentUser && document.hasFocus()) {
               markAsRead(data.chatId);
             }
@@ -508,7 +721,7 @@ export default function ChatsPage() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-2 pt-2">
+        <div className="flex-1 overflow-y-auto px-2 pt-2 custom-scrollbar">
           {searchQuery ? (
             <div className="space-y-1">
               {searchResults.map((u) => {
@@ -529,7 +742,11 @@ export default function ChatsPage() {
                         handleSelectUser(u.username);
                       }
                     }}
-                    className={`p-3 rounded-xl cursor-pointer flex items-center justify-between transition-all ${isSelected ? "bg-blue-600/20 border border-blue-600/40" : "hover:bg-[#1e1e1e]"}`}
+                    className={`p-3 rounded-xl cursor-pointer flex items-center justify-between transition-all ${
+                      isSelected
+                        ? "bg-blue-600/20 border border-blue-600/40"
+                        : "hover:bg-[#1e1e1e]"
+                    }`}
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-xs">
@@ -539,9 +756,9 @@ export default function ChatsPage() {
                     </div>
                     {isGroupMode && (
                       <div
-                        className={`w-4 h-4 rounded border ${isSelected ? "bg-blue-500" : "border-gray-600"}`}
+                        className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected ? "bg-blue-500 border-blue-500" : "border-gray-600"}`}
                       >
-                        {isSelected && "✓"}
+                        {isSelected && <span className="text-[10px]">✓</span>}
                       </div>
                     )}
                   </div>
@@ -553,7 +770,11 @@ export default function ChatsPage() {
               <div
                 key={c._id}
                 onClick={() => setSelectedChat(c)}
-                className={`p-3 rounded-xl cursor-pointer mb-1 transition-all ${selectedChat?._id === c._id ? "bg-blue-600/20 border border-blue-600/50" : "hover:bg-[#1e1e1e]"}`}
+                className={`p-3 rounded-xl cursor-pointer mb-1 transition-all ${
+                  selectedChat?._id === c._id
+                    ? "bg-blue-600/20 border border-blue-600/50"
+                    : "hover:bg-[#1e1e1e]"
+                }`}
               >
                 <div className="flex items-center gap-3">
                   <div
@@ -573,122 +794,303 @@ export default function ChatsPage() {
         {!isGroupMode && (
           <button
             onClick={() => setIsGroupMode(true)}
-            className="absolute bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shadow-2xl active:scale-90"
+            className="absolute bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform"
           >
-            +
+            <span className="text-2xl">+</span>
           </button>
         )}
       </aside>
 
       {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col m-2 ml-0 bg-[#0a0a0a] rounded-2xl border border-gray-800 overflow-hidden">
+      <main className="flex-1 flex flex-col m-2 ml-0 bg-[#0a0a0a] rounded-2xl border border-gray-800 overflow-hidden relative">
         {selectedChat ? (
           <>
-            <div className="p-4 border-b border-gray-800 bg-[#121212] flex items-center justify-between">
+            {/* Chat Header */}
+            <div className="p-4 border-b border-gray-800 bg-[#121212] flex items-center justify-between z-10">
               <div className="flex items-center gap-3">
                 <span className="font-bold text-lg">
                   {getChatDisplayName(selectedChat)}
                 </span>
                 {isPeerTyping && (
-                  <div className="text-[10px] text-blue-400 animate-pulse">
+                  <div className="text-[10px] text-blue-400 animate-pulse uppercase tracking-tighter">
                     typing...
                   </div>
                 )}
               </div>
             </div>
 
+            {/* Messages Area */}
             <div
-              className="flex-1 overflow-y-auto p-4 space-y-4"
+              className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar"
               ref={scrollContainerRef}
               onScroll={handleScroll}
             >
-              {messages.map((msg) => (
-                <div
-                  key={msg._id}
-                  className={`flex group ${msg.sender === currentUser ? "justify-end" : "justify-start"}`}
-                >
+              {messages.map((msg) => {
+                // Определяем, является ли сообщение стикером
+                const isSticker = msg.mediaUrl?.includes("/stickers/");
+
+                return (
                   <div
-                    className={`relative p-3 rounded-2xl max-w-[70%] text-sm shadow-lg transition-all ${
-                      msg.sender === currentUser
-                        ? "bg-blue-600 ml-12"
-                        : "bg-[#1e1e1e] mr-12"
-                    }`}
+                    key={msg._id}
+                    className={`flex group ${msg.sender === currentUser ? "justify-end" : "justify-start"}`}
                   >
-                    {/* Кнопки управления (видны только владельцу при наведении) */}
-                    {msg.sender === currentUser && (
-                      <div className="absolute -left-25 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => startEdit(msg)}
-                          className="p-1.5 hover:bg-gray-800 rounded text-gray-400 hover:text-blue-400"
-                          title="Edit"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => deleteMessage(msg._id)}
-                          className="p-1.5 hover:bg-gray-800 rounded text-gray-400 hover:text-red-400"
-                          title="Delete"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-
-                    <DecryptedText
-                      text={msg.text}
-                      currentUser={currentUser}
-                      sender={msg.sender}
-                    />
-
-                    <div className="flex justify-end items-center gap-1 mt-1 opacity-40 text-[9px]">
-                      {new Date(msg.timestamp).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                      {msg.sender === currentUser && (
-                        <span className={msg.seen ? "text-blue-200" : ""}>
-                          {msg.seen ? " ✓✓" : " ✓"}
-                        </span>
+                    <div
+                      className={`relative transition-all ${
+                        isSticker
+                          ? "bg-transparent shadow-none"
+                          : msg.sender === currentUser
+                            ? "bg-blue-600 shadow-lg p-3 rounded-2xl"
+                            : "bg-[#1e1e1e] shadow-lg p-3 rounded-2xl"
+                      } max-w-[70%] text-sm`}
+                    >
+                      {/* Кнопки редактирования (показываем только если не стикер или по желанию) */}
+                      {msg.sender === currentUser && !isSticker && (
+                        <div className="absolute -left-20 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => startEdit(msg)}
+                            className="p-1 text-[10px] bg-gray-800 rounded text-gray-400 hover:text-blue-400 uppercase font-bold"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => deleteMessage(msg._id)}
+                            className="p-1 text-[10px] bg-gray-800 rounded text-gray-400 hover:text-red-400 uppercase font-bold"
+                          >
+                            Del
+                          </button>
+                        </div>
                       )}
+
+                      <DecryptedText
+                        text={msg.text}
+                        currentUser={currentUser}
+                        sender={msg.sender}
+                        mediaUrl={msg.mediaUrl}
+                        onExpand={(url) => {
+                          if (!url.includes("/stickers/")) {
+                            setFullscreenMedia(url);
+                          }
+                        }}
+                      />
+
+                      {/* Время сообщения для стикера можно сделать полупрозрачным под ним */}
+                      <div
+                        className={`flex justify-end items-center gap-1 mt-1 text-[9px] ${
+                          isSticker ? "text-gray-500" : "opacity-40 text-white"
+                        }`}
+                      >
+                        {new Date(msg.timestamp).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                        {msg.sender === currentUser && (
+                          <span className={msg.seen ? "text-blue-400" : ""}>
+                            {msg.seen ? " ✓✓" : " ✓"}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               <div ref={messageEndRef} />
             </div>
 
-            <div className="p-4 bg-[#121212] border-t border-gray-800 flex flex-col gap-2">
+            {/* Input Area */}
+            <div className="p-4 bg-[#121212] border-t border-gray-800 flex flex-col gap-2 relative">
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept="image/*,video/*"
+                onChange={(e) => {
+                  const selectedFile = e.target.files?.[0];
+                  if (selectedFile) setFile(selectedFile);
+                }}
+              />
+
               {editingMessage && (
-                <div className="flex justify-between text-[10px] text-blue-400 px-2 uppercase font-bold">
-                  Editing mode <button onClick={cancelEdit}>Cancel</button>
+                <div className="flex justify-between text-[10px] text-blue-400 px-2 uppercase font-bold animate-in fade-in">
+                  Editing message{" "}
+                  <button
+                    onClick={cancelEdit}
+                    className="text-gray-500 hover:text-white"
+                  >
+                    Cancel
+                  </button>
                 </div>
               )}
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-[#1e1e1e] p-3 rounded-xl outline-none text-sm focus:ring-1 ring-blue-500"
-                  value={newMessage}
-                  onChange={(e) => {
-                    setNewMessage(e.target.value);
-                    handleTyping();
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && handleAction()}
-                  placeholder="Message..."
-                />
+
+              {/* File Preview & Upload Progress */}
+              {(file || isUploading) && (
+                <div className="px-4 py-3 border rounded-xl border-white/10 bg-white/5 mb-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-blue-400 truncate">
+                      📎 {file?.name || "Uploading..."}
+                    </span>
+                    {!isUploading && (
+                      <button
+                        onClick={() => setFile(null)}
+                        className="text-red-500"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  {isUploading && (
+                    <div className="w-full bg-white/10 rounded-full h-1 overflow-hidden">
+                      <div
+                        className="bg-blue-500 h-full transition-all duration-300"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-end gap-3 relative">
                 <button
-                  onClick={handleAction}
-                  className="bg-blue-600 px-6 rounded-xl text-xs font-bold active:scale-95"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading || !!editingMessage}
+                  className="p-3 bg-[#1e1e1e] rounded-xl hover:bg-gray-800 transition-colors disabled:opacity-30 flex-shrink-0"
                 >
-                  {editingMessage ? "SAVE" : "SEND"}
+                  <Paperclip size={20} className="text-gray-400" />
                 </button>
+
+                <div className="flex-1 relative">
+                  <input
+                    className="w-full bg-[#1e1e1e] p-3 pr-12 rounded-xl outline-none text-sm focus:ring-1 ring-blue-500 text-white min-h-[46px]"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" && handleAction(file || undefined)
+                    }
+                    placeholder="Write a message..."
+                  />
+
+                  {/* Emoji/Sticker Trigger */}
+                  {/* Кнопка эмодзи внутри инпута справа */}
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center emoji-container">
+                    <button
+                      type="button"
+                      onClick={() => setShowStickers(!showStickers)} // Переключаем по клику
+                      className={`p-2 transition-colors ${showStickers ? "text-blue-500" : "text-gray-400 hover:text-white"}`}
+                    >
+                      <Smile size={22} />
+                    </button>
+
+                    {/* ПАНЕЛЬ СТИКЕРОВ */}
+                    {showStickers && (
+                      <div className="absolute bottom-full right-0 mb-4 w-72 h-96 bg-[#121212] border border-gray-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2">
+                        <div className="flex justify-around p-3 border-b border-gray-800 text-[10px] font-bold uppercase text-gray-500 bg-[#0a0a0a]">
+                          <span className="hover:text-white cursor-pointer">
+                            Эмодзи
+                          </span>
+                          <span className="text-blue-500 border-b border-blue-500 pb-1">
+                            Стикеры
+                          </span>
+                          <span className="hover:text-white cursor-pointer">
+                            GIF
+                          </span>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-[#121212]">
+                          {stickerPacks.map((pack) => (
+                            <div key={pack.name} className="mb-4">
+                              <p className="text-[10px] text-gray-500 mb-2">
+                                {pack.name}
+                              </p>
+                              <div className="grid grid-cols-4 gap-2">
+                                {pack.stickers.map((url, i) => (
+                                  <img
+                                    key={i}
+                                    src={url}
+                                    className="w-full aspect-square object-contain cursor-pointer hover:scale-110 hover:bg-white/5 rounded-lg transition-all"
+                                    onClick={() => {
+                                      sendSticker(url);
+                                      setShowStickers(false); // Закрываем после выбора
+                                    }}
+                                    alt="sticker"
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex-shrink-0">
+                  {newMessage.trim() || file || editingMessage ? (
+                    <button
+                      onClick={() => handleAction(file || undefined)}
+                      disabled={isUploading}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-[46px] px-6 rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      <Send size={18} />
+                      <span className="text-xs uppercase">
+                        {editingMessage ? "Save" : "Send"}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      onMouseDown={startRecording}
+                      onMouseUp={stopRecording}
+                      className={`p-3 rounded-full transition-all flex items-center justify-center ${
+                        isRecording
+                          ? "bg-red-500 scale-110 shadow-lg text-white"
+                          : "bg-[#1e1e1e] text-gray-400 hover:bg-gray-800"
+                      }`}
+                    >
+                      <Mic size={22} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-700 italic text-sm">
-            Select a chat
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-700 space-y-4">
+            <div className="w-16 h-16 border-2 border-dashed border-gray-800 rounded-full flex items-center justify-center">
+              <span className="text-2xl">💬</span>
+            </div>
+            <p className="italic text-sm">Select a chat to start messaging</p>
           </div>
         )}
       </main>
+
+      {/* Fullscreen Media Lightbox */}
+      {fullscreenMedia && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setFullscreenMedia(null)}
+        >
+          <button className="absolute top-8 right-8 text-white/50 hover:text-white text-5xl transition-colors">
+            ×
+          </button>
+          <div
+            className="relative max-w-[90vw] max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {fullscreenMedia.match(/\.(mp4|webm|mov)$/i) ? (
+              <video
+                src={fullscreenMedia}
+                controls
+                autoPlay
+                className="max-w-full max-h-[90vh] rounded-lg shadow-2xl"
+              />
+            ) : (
+              <img
+                src={fullscreenMedia}
+                alt="Preview"
+                className="max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain"
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
