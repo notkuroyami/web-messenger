@@ -6,6 +6,12 @@ import io, { Socket } from "socket.io-client";
 import { initE2E, encryptMessage, decryptMessage } from "@/lib/crypto";
 import axios from "axios";
 import { Send, Mic, Video, Paperclip, Smile } from "lucide-react";
+import dynamic from "next/dynamic";
+
+const VoiceMessage = dynamic(() => import("@/components/VoiceMessage"), {
+  ssr: false,
+  loading: () => <div className="w-48 h-10 bg-gray-800 animate-pulse rounded-xl" />,
+});
 
 // Интерфейсы
 interface User {
@@ -19,7 +25,10 @@ interface IMessage {
   timestamp: string;
   chatId: string;
   seen?: boolean;
-  mediaUrl?: string; // Добавлено для поддержки медиа
+  mediaUrl?: string;
+  type?: "text" | "image" | "audio" | "video" | "sticker";
+  duration?: string; // e.g. "0:07"
+  size?: string;     // e.g. "36 KB"
 }
 interface IChat {
   _id: string;
@@ -130,6 +139,9 @@ export default function ChatsPage() {
   const [isRecording, setIsRecording] = useState(false); // Для визуализации записи
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStartTimeRef = useRef<number | null>(null);
+  const [recordingElapsed, setRecordingElapsed] = useState(0); // seconds, for UI display
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [showStickers, setShowStickers] = useState(false);
 
   // Кэш для хранения открытого текста отправленных сообщений в текущей сессии
@@ -313,23 +325,36 @@ export default function ChatsPage() {
       };
 
       recorder.onstop = async () => {
+        // Collect blob AFTER all chunks are in
         const blob = new Blob(audioChunksRef.current, {
           type: mediaMode === "voice" ? "audio/webm" : "video/webm",
         });
 
-        // Create a File object from the Blob to reuse your handleAction logic
-        const fileName =
-          mediaMode === "voice" ? "voice_message.webm" : "video_message.webm";
+        // Use ref (not state) to avoid stale closure
+        const finalDurSecs = recordingStartTimeRef.current
+          ? Math.round((Date.now() - recordingStartTimeRef.current) / 1000)
+          : 0;
+        const finalBlobSize = blob.size; // read from blob, not File
+
+        const fileName = mediaMode === "voice" ? "voice_message.webm" : "video_message.webm";
         const recordedFile = new File([blob], fileName, { type: blob.type });
 
-        await handleAction(recordedFile);
+        await handleAction(recordedFile, finalDurSecs, finalBlobSize);
 
-        // Stop all tracks to turn off the camera/mic light
         stream.getTracks().forEach((track) => track.stop());
+        recordingStartTimeRef.current = null;
       };
 
+      const start = Date.now();
+      recordingStartTimeRef.current = start;
+      setRecordingElapsed(0);
       recorder.start();
       setIsRecording(true);
+
+      // Tick every second so we can show live timer in UI
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingElapsed(Math.floor((Date.now() - start) / 1000));
+      }, 1000);
     } catch (err) {
       console.error("Error accessing media devices:", err);
       alert("Could not access microphone/camera");
@@ -340,6 +365,10 @@ export default function ChatsPage() {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
     }
   };
 
@@ -422,8 +451,20 @@ export default function ChatsPage() {
     return response.data.secure_url;
   };
 
+  const formatFileSize = (bytes: number): string => {
+    if (!bytes) return "";
+    const kb = bytes / 1024;
+    return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)}`;
+  };
+
+  const formatDurationSecs = (seconds: number): string => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
   // Замени свою функцию handleAction на эту:
-  const handleAction = async (file?: File) => {
+  const handleAction = async (file?: File, audioDuration?: number, audioBlobSize?: number) => {
     let mediaUrl = "";
 
     // 1. Подготовка: включаем индикатор загрузки и сбрасываем прогресс
@@ -500,8 +541,11 @@ export default function ChatsPage() {
           body: JSON.stringify({
             sender: currentUser,
             chatId: selectedChat._id,
-            text: textToDatabase || "", // Текст сообщения + подпись
+            text: textToDatabase || "",
             mediaUrl: mediaUrl || undefined,
+            type: file?.type.startsWith("audio/") || file?.name.includes("voice") ? "audio" : "text",
+            duration: audioDuration !== undefined ? formatDurationSecs(audioDuration) : undefined,
+            size: audioBlobSize !== undefined ? formatFileSize(audioBlobSize) : undefined,
           }),
         });
 
@@ -826,8 +870,8 @@ export default function ChatsPage() {
               onScroll={handleScroll}
             >
               {messages.map((msg) => {
-                // Определяем, является ли сообщение стикером
                 const isSticker = msg.mediaUrl?.includes("/stickers/");
+                const isAudio = msg.type === "audio" || msg.mediaUrl?.endsWith(".webm");
 
                 return (
                   <div
@@ -841,7 +885,7 @@ export default function ChatsPage() {
                           : msg.sender === currentUser
                             ? "bg-blue-600 shadow-lg p-3 rounded-2xl"
                             : "bg-[#1e1e1e] shadow-lg p-3 rounded-2xl"
-                      } max-w-[70%] text-sm`}
+                      } max-w-[30%] text-sm`}
                     >
                       {/* Кнопки редактирования (показываем только если не стикер или по желанию) */}
                       {msg.sender === currentUser && !isSticker && (
@@ -861,17 +905,24 @@ export default function ChatsPage() {
                         </div>
                       )}
 
-                      <DecryptedText
-                        text={msg.text}
-                        currentUser={currentUser}
-                        sender={msg.sender}
-                        mediaUrl={msg.mediaUrl}
-                        onExpand={(url) => {
-                          if (!url.includes("/stickers/")) {
-                            setFullscreenMedia(url);
-                          }
-                        }}
-                      />
+                      {isAudio ? (
+                        <VoiceMessage
+                          audioUrl={msg.mediaUrl || ""}
+                          duration={msg.duration}
+                        />
+                      ) : (
+                        <DecryptedText
+                          text={msg.text}
+                          currentUser={currentUser}
+                          sender={msg.sender}
+                          mediaUrl={msg.mediaUrl}
+                          onExpand={(url) => {
+                            if (!url.includes("/stickers/")) {
+                              setFullscreenMedia(url);
+                            }
+                          }}
+                        />
+                      )}
 
                       {/* Время сообщения для стикера можно сделать полупрозрачным под ним */}
                       <div
@@ -1022,7 +1073,12 @@ export default function ChatsPage() {
                   </div>
                 </div>
 
-                <div className="flex-shrink-0">
+                <div className="flex-shrink-0 flex items-center gap-2">
+                  {isRecording && (
+                    <span className="text-red-400 text-xs font-mono animate-pulse">
+                      {formatDurationSecs(recordingElapsed)}
+                    </span>
+                  )}
                   {newMessage.trim() || file || editingMessage ? (
                     <button
                       onClick={() => handleAction(file || undefined)}
