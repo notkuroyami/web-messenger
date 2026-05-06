@@ -10,7 +10,9 @@ import dynamic from "next/dynamic";
 
 const VoiceMessage = dynamic(() => import("@/components/VoiceMessage"), {
   ssr: false,
-  loading: () => <div className="w-48 h-10 bg-gray-800 animate-pulse rounded-xl" />,
+  loading: () => (
+    <div className="w-48 h-10 bg-gray-800 animate-pulse rounded-xl" />
+  ),
 });
 
 // Интерфейсы
@@ -28,7 +30,7 @@ interface IMessage {
   mediaUrl?: string;
   type?: "text" | "image" | "audio" | "video" | "sticker";
   duration?: string; // e.g. "0:07"
-  size?: string;     // e.g. "36 KB"
+  size?: string; // e.g. "36 KB"
 }
 interface IChat {
   _id: string;
@@ -216,6 +218,14 @@ export default function ChatsPage() {
       }
     }
   }, [messages, currentUser]);
+  
+  useEffect(() => {
+  return () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+  };
+}, []);
 
   useEffect(() => {
     const onFocus = () => setIsWindowFocused(true);
@@ -311,11 +321,13 @@ export default function ChatsPage() {
 
   const startRecording = async () => {
     try {
+      // 1. Запрашиваем доступ к медиа
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: mediaMode === "video",
       });
 
+      // 2. Инициализируем Recorder
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
@@ -324,34 +336,46 @@ export default function ChatsPage() {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
+      // 3. Логика завершения записи
       recorder.onstop = async () => {
-        // Collect blob AFTER all chunks are in
         const blob = new Blob(audioChunksRef.current, {
           type: mediaMode === "voice" ? "audio/webm" : "video/webm",
         });
 
-        // Use ref (not state) to avoid stale closure
+        // Используем Ref для получения точного времени на момент остановки
         const finalDurSecs = recordingStartTimeRef.current
           ? Math.round((Date.now() - recordingStartTimeRef.current) / 1000)
           : 0;
-        const finalBlobSize = blob.size; // read from blob, not File
 
-        const fileName = mediaMode === "voice" ? "voice_message.webm" : "video_message.webm";
+        const finalBlobSize = blob.size;
+        const fileName =
+          mediaMode === "voice" ? "voice_message.webm" : "video_message.webm";
         const recordedFile = new File([blob], fileName, { type: blob.type });
 
+        // Отправка файла на сервер/Cloudinary
         await handleAction(recordedFile, finalDurSecs, finalBlobSize);
 
+        // Останавливаем все дорожки микрофона/камеры
         stream.getTracks().forEach((track) => track.stop());
+
+        // Сбрасываем время начала записи
         recordingStartTimeRef.current = null;
       };
 
+      // 4. Запуск таймера и записи
       const start = Date.now();
       recordingStartTimeRef.current = start;
+
+      // СБРОС: Обнуляем визуальный счетчик перед стартом[cite: 1]
       setRecordingElapsed(0);
+
+      // Очистка старого интервала, если он почему-то не удалился
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+
       recorder.start();
       setIsRecording(true);
 
-      // Tick every second so we can show live timer in UI
+      // Запускаем новый интервал для обновления UI каждую секунду[cite: 1]
       timerIntervalRef.current = setInterval(() => {
         setRecordingElapsed(Math.floor((Date.now() - start) / 1000));
       }, 1000);
@@ -363,12 +387,18 @@ export default function ChatsPage() {
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
+      // Останавливаем физическую запись
       mediaRecorderRef.current.stop();
       setIsRecording(false);
+
+      // ОЧИСТКА: Останавливаем таймер и обнуляем его стейт[cite: 1]
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
         timerIntervalRef.current = null;
       }
+
+      // Визуально сбрасываем счетчик в 0, чтобы он не «залипал» на последней секунде[cite: 1]
+      setRecordingElapsed(0);
     }
   };
 
@@ -423,32 +453,38 @@ export default function ChatsPage() {
     setEditingMessage(msg);
   };
 
-  const cancelEdit = () => {
-    setEditingMessage(null);
-    setNewMessage("");
-  };
-
   const uploadToCloudinary = async (
     file: File,
     onProgress: (percent: number) => void,
-  ) => {
+  ): Promise<string> => {
+    // Указываем, что функция возвращает строку (URL)
     const formData = new FormData();
     formData.append("file", file);
     formData.append("upload_preset", "messenger_preset");
 
-    const response = await axios.post(
-      `https://api.cloudinary.com/v1_1/doua0g09z/upload`,
-      formData,
-      {
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round(
-            (progressEvent.loaded * 100) / (progressEvent.total || 1),
-          );
-          onProgress(percentCompleted);
+    try {
+      const response = await axios.post(
+        `https://api.cloudinary.com/v1_1/doua0g09z/auto/upload`,
+        formData,
+        {
+          onUploadProgress: (pe) => {
+            const total = pe.total || 1;
+            const percent = Math.round((pe.loaded * 100) / total);
+            onProgress(percent);
+          },
         },
-      },
-    );
-    return response.data.secure_url;
+      );
+      return response.data.secure_url;
+    } catch (error: unknown) {
+      // Используем unknown вместо any
+      if (axios.isAxiosError(error)) {
+        const serverMessage = error.response?.data?.error?.message;
+        console.error("Cloudinary Error:", serverMessage || error.message);
+      } else {
+        console.error("Unexpected Error:", error);
+      }
+      throw error;
+    }
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -464,7 +500,11 @@ export default function ChatsPage() {
   };
 
   // Замени свою функцию handleAction на эту:
-  const handleAction = async (file?: File, audioDuration?: number, audioBlobSize?: number) => {
+  const handleAction = async (
+    file?: File,
+    audioDuration?: number,
+    audioBlobSize?: number,
+  ) => {
     let mediaUrl = "";
 
     // 1. Подготовка: включаем индикатор загрузки и сбрасываем прогресс
@@ -543,9 +583,18 @@ export default function ChatsPage() {
             chatId: selectedChat._id,
             text: textToDatabase || "",
             mediaUrl: mediaUrl || undefined,
-            type: file?.type.startsWith("audio/") || file?.name.includes("voice") ? "audio" : "text",
-            duration: audioDuration !== undefined ? formatDurationSecs(audioDuration) : undefined,
-            size: audioBlobSize !== undefined ? formatFileSize(audioBlobSize) : undefined,
+            type:
+              file?.type.startsWith("audio/") || file?.name.includes("voice")
+                ? "audio"
+                : "text",
+            duration:
+              audioDuration !== undefined
+                ? formatDurationSecs(audioDuration)
+                : undefined,
+            size:
+              audioBlobSize !== undefined
+                ? formatFileSize(audioBlobSize)
+                : undefined,
           }),
         });
 
@@ -582,17 +631,29 @@ export default function ChatsPage() {
       if (!socket) {
         socket = io({ path: "/api/socket" });
         socket.on("receive-message", (data: IMessage) => {
+          // 1. Обновляем сообщения, если открыт этот чат
           if (data.chatId === selectedChatRef.current?._id) {
-            setMessages((prev) => {
-              if (prev.find((m) => m._id === data._id)) return prev;
-              return [...prev, data];
-            });
-
-            if (data.sender !== currentUser && document.hasFocus()) {
-              markAsRead(data.chatId);
-            }
+            setMessages((prev) =>
+              prev.find((m) => m._id === data._id) ? prev : [...prev, data],
+            );
           }
-          fetchRecentChats();
+
+          // 2. Перемещаем чат наверх в списке сайдбара
+          setRecentChats((prevChats) => {
+            // Находим чат, в который пришло сообщение
+            const chatIndex = prevChats.findIndex((c) => c._id === data.chatId);
+
+            if (chatIndex !== -1) {
+              const updatedChats = [...prevChats];
+              const [targetChat] = updatedChats.splice(chatIndex, 1); // Вырезаем его
+              return [targetChat, ...updatedChats]; // Вставляем в начало
+            }
+
+            // Если чата нет в списке (например, новое первое сообщение),
+            // лучше просто перезапросить список через fetchRecentChats()
+            fetchRecentChats();
+            return prevChats;
+          });
         });
         socket.on("message-updated", (updatedMsg: IMessage) => {
           if (updatedMsg.chatId === selectedChatRef.current?._id) {
@@ -721,7 +782,7 @@ export default function ChatsPage() {
           </div>
           <button
             onClick={() => signOut({ callbackUrl: "/login" })}
-            className="text-[10px] bg-red-500/10 text-red-500 px-3 py-1.5 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition-all"
+            className="text-[10px] bg-red-500/20 text-red-500 px-3 py-1.5 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition-all"
           >
             EXIT
           </button>
@@ -871,7 +932,8 @@ export default function ChatsPage() {
             >
               {messages.map((msg) => {
                 const isSticker = msg.mediaUrl?.includes("/stickers/");
-                const isAudio = msg.type === "audio" || msg.mediaUrl?.endsWith(".webm");
+                const isAudio =
+                  msg.type === "audio" || msg.mediaUrl?.endsWith(".webm");
 
                 return (
                   <div
