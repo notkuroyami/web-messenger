@@ -2,15 +2,6 @@ import { NextResponse } from "next/server";
 import connectDB from "@/lib/db";
 import Message from "@/models/Message";
 
-// Увеличиваем лимит размера тела запроса для тяжелых файлов (например, видео или длинных голосовых)
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "10mb",
-    },
-  },
-};
-
 /**
  * Получение сообщений
  */
@@ -20,7 +11,10 @@ export async function GET(req: Request) {
     const chatId = searchParams.get("chatId");
 
     if (!chatId) {
-      return NextResponse.json({ error: "No chatId provided" }, { status: 400 });
+      return NextResponse.json(
+        { error: "No chatId provided" },
+        { status: 400 },
+      );
     }
 
     await connectDB();
@@ -28,7 +22,10 @@ export async function GET(req: Request) {
     return NextResponse.json(messages);
   } catch (error) {
     console.error("GET Messages Error:", error);
-    return NextResponse.json({ error: "Failed to fetch messages" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to fetch messages" },
+      { status: 500 },
+    );
   }
 }
 
@@ -46,7 +43,7 @@ export async function POST(req: Request) {
     if (!text && !mediaUrl) {
       return NextResponse.json(
         { error: "Message must contain either text or media" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -54,7 +51,7 @@ export async function POST(req: Request) {
     if (!sender || !chatId) {
       return NextResponse.json(
         { error: "Sender and chatId are required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -74,13 +71,13 @@ export async function POST(req: Request) {
   } catch (error: unknown) {
     // Выводим детальную ошибку в консоль сервера (терминал VS Code)
     console.error("POST Message Error Details:", error);
-    
+
     return NextResponse.json(
-      { 
-        error: "Failed to create message", 
-        details: error instanceof Error ? error.message : "Unknown error" 
+      {
+        error: "Failed to create message",
+        details: error instanceof Error ? error.message : "Unknown error",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
@@ -90,17 +87,20 @@ export async function POST(req: Request) {
  */
 export async function PATCH(req: Request) {
   try {
-    const { messageId, text } = await req.json();
+    const { messageId, text, type } = await req.json(); // Добавь type здесь[cite: 1]
 
     if (!messageId) {
-      return NextResponse.json({ error: "Message ID is required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Message ID is required" },
+        { status: 400 },
+      );
     }
 
     await connectDB();
     const updated = await Message.findByIdAndUpdate(
       messageId,
-      { text },
-      { new: true }
+      { text, type: type || "text" }, // Обновляем текст и тип[cite: 1]
+      { new: true },
     );
 
     return NextResponse.json(updated);
@@ -119,7 +119,10 @@ export async function DELETE(req: Request) {
     const messageId = searchParams.get("messageId");
 
     if (!messageId) {
-      return NextResponse.json({ error: "Message ID is required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Message ID is required" },
+        { status: 400 },
+      );
     }
 
     await connectDB();

@@ -218,14 +218,14 @@ export default function ChatsPage() {
       }
     }
   }, [messages, currentUser]);
-  
+
   useEffect(() => {
-  return () => {
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-    }
-  };
-}, []);
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const onFocus = () => setIsWindowFocused(true);
@@ -453,6 +453,11 @@ export default function ChatsPage() {
     setEditingMessage(msg);
   };
 
+  const cancelEdit = () => {
+    setEditingMessage(null);
+    setNewMessage("");
+  };
+
   const uploadToCloudinary = async (
     file: File,
     onProgress: (percent: number) => void,
@@ -562,6 +567,9 @@ export default function ChatsPage() {
           body: JSON.stringify({
             messageId: editingMessage._id,
             text: textToDatabase,
+            // Добавляем принудительную смену типа на "text",
+            // чтобы компонент переключился с плеера на отображение текста
+            type: "text",
           }),
         });
 
@@ -968,10 +976,30 @@ export default function ChatsPage() {
                       )}
 
                       {isAudio ? (
-                        <VoiceMessage
-                          audioUrl={msg.mediaUrl || ""}
-                          duration={msg.duration}
-                        />
+                        <div className="flex flex-col gap-2">
+                          {/* Голосовое сообщение */}
+                          <VoiceMessage
+                            audioUrl={msg.mediaUrl || ""}
+                            duration={msg.duration}
+                          />
+
+                          {/* Добавляем текст под аудио, если он есть */}
+                          {msg.text && (
+                            <div className="border-t border-white/10 mt-1 pt-1">
+                              <DecryptedText
+                                text={msg.text}
+                                currentUser={currentUser}
+                                sender={msg.sender}
+                                // Здесь mediaUrl не передаем, чтобы не дублировать плеер
+                                onExpand={(url) => {
+                                  if (!url.includes("/stickers/")) {
+                                    setFullscreenMedia(url);
+                                  }
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <DecryptedText
                           text={msg.text}
@@ -985,7 +1013,6 @@ export default function ChatsPage() {
                           }}
                         />
                       )}
-
                       {/* Время сообщения для стикера можно сделать полупрозрачным под ним */}
                       <div
                         className={`flex justify-end items-center gap-1 mt-1 text-[9px] ${
