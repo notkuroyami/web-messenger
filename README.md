@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 💬 Next.js Real-Time Web Messenger
 
-## Getting Started
+A modern, responsive web messenger built with **React**, **Next.js**, and **Tailwind CSS**, using **MongoDB** for secure and efficient data storage. This project showcases full-stack web capabilities, focusing on seamless real-time messaging and a clean UI/UX layout.
 
-First, run the development server:
+---
 
+## 📸 Interface Preview
+
+> **Note for Clients:** Below are the actual screenshots of the web application interface, demonstrating the responsive layout, component spacing, and modern design implementation.
+
+### 🖥️ Main Chat & Channels Interface
+![Main Screen](./main_screen.png)
+*Clean, modern dual-panel layout with active chats, channels list, and intuitive navigation interface.*
+
+### 📱 Login Page
+![Login Page](./login.png)
+*Secure and user-friendly authentication screen, fully optimized and responsive for both desktop and mobile viewports.*
+
+### ⚙️ Group Creating Menu
+![Group Creating](./group_create.png)
+*Interactive modal interface designed with Tailwind CSS for seamless group creation and member management.*
+
+---
+
+## 🛠️ Tech Stack & Architecture
+
+* **Front-End:** React, Next.js, HTML5, CSS3, Tailwind CSS (for modern UI & seamless responsiveness).
+* **Back-End & Database:** Node.js, MongoDB (for structured data storage, chat logs, and user profiles).
+* **UI/UX Focus:** Clean typography, intuitive navigation, fast loading speeds, and interactive components.
+
+---
+
+## 🚀 Key Features Implemented
+
+* 👥 **1-on-1 & Group Chats:** Robust web messaging interface with real-time updates.
+* 📢 **Channels:** Built-in community channels for broader communications.
+* 📁 **Media Sharing:** Supported file, image, and GIF sharing within chat windows.
+* 📱 **100% Responsive:** Adapts flawlessly to any desktop screen resolution.
+
+---
+
+## ⚡ How to Run Locally
+
+1. **Clone the repository:**
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+   git clone [https://github.com/notkuroyami/web-messenger.git](https://github.com/notkuroyami/web-messenger.git)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Install dependencies:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Bash
+   npm install
+Run the development server:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Bash
+   npm run dev
+Developed by Serhii Chaika — Software Engineering Student & Full-Stack Developer.
